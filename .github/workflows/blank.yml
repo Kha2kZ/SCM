@@ -1,0 +1,30 @@
+name: Compile Windows Miner
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Install MinGW-w64 Cross-Compiler
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y mingw-w64
+
+    - name: Compile C++ to Windows .exe
+      run: |
+        # Biên dịch file client_window.cpp thành crypto_miner.exe với tối ưu hóa cao nhất (-O3) và liên kết tĩnh (-static)
+        x86_64-w64-mingw32-g++ -O3 -static -pthread client_window.cpp -o crypto_miner.exe
+
+    - name: Upload Compiled Exe Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: windows-miner-exe
+        path: crypto_miner.exe
