@@ -1,6 +1,6 @@
-# CRYPTO_SIM_ENGINE // CLI-BASED PROOF-OF-WORK SIMULATOR
+#CLI-BASED POW CRYPTO MINER
 
-A high-performance, multi-threaded C++ Proof-of-Work (PoW) mining simulator featuring native ASIC-style hashing, solo and HTTP REST pool mining pipelines, and an external file-based Mod Loader.
+A high-performance, multi-threaded C++ Proof-of-Work (PoW) mining system featuring native ASIC-style hashing, solo and HTTP REST pool mining pipelines, and an external file-based Mod Loader.
 
 > **Language:** [English](README.md) | [Tiếng Việt](README_VI.md)
 
@@ -52,7 +52,7 @@ The core hashing loop is engineered for minimal memory allocation and maximum CP
 
 | Parameter | Rule / Formula |
 | :--- | :--- |
-| **Asset Nature** | **100% Virtual / Simulated.** Balances displayed in `BTC` are strictly for entertainment, benchmarking, and distributed systems experimentation. They hold **zero** real-world monetary value and cannot be withdrawn to real crypto networks. |
+| **Asset Nature** | **100% Virtual.** Balances displayed in `BTC` are strictly for entertainment, benchmarking, and distributed systems experimentation. They hold **zero** real-world monetary value and cannot be withdrawn to real crypto networks. |
 | **Reward Formula** | $\text{Reward} = 0.000005 \times 1.6^{(\text{difficulty} - 1)} \text{ BTC}$ |
 | **Auto-Difficulty** | Dynamically adjusts block difficulty (`+1` to `+4` or `-2`) based on solve duration thresholds (`< 0.8s`, `< 2.5s`, `< 7.0s`, `> 22.0s`) in Solo mode. |
 
