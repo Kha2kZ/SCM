@@ -29,13 +29,12 @@
 #define COLOR_CYAN    "\033[36m"
 #define COLOR_MAGENTA "\033[35m"
 
-// Hàm tự động lấy đường dẫn Desktop của User hiện tại trên Windows
 std::string getDesktopMinerDir() {
     const char* userProfile = std::getenv("USERPROFILE");
     if (userProfile != nullptr && std::string(userProfile).length() > 0) {
         return std::string(userProfile) + "\\Desktop\\crypto_miner";
     }
-    return "crypto_miner"; // Fallback nếu không đọc được biến môi trường
+    return "crypto_miner";
 }
 
 const std::string BASE_DIR        = getDesktopMinerDir();
@@ -345,8 +344,8 @@ void runLocalMining(double& walletBalance, int& blockIndex, int& difficulty, boo
         int numThreads = std::thread::hardware_concurrency();
         if (numThreads < 1) numThreads = 4;
 
-        std::cout << "[SYSTEM] Initializing Optimized Engine... (" << numThreads << " threads)...\n"
-                  << "[SYSTEM] Resuming Block #" << blockIndex << " | Difficulty: " << difficulty << "/20\n"
+        std::cout << "[SYSTEM] Initializing... (" << numThreads << " threads)...\n"
+                  << "[SYSTEM] Resuming Block #" << blockIndex << " | Difficulty: " << difficulty << "\n"
                   << "[SYSTEM] Press [ENTER] at any time to abort.\n\n";
 
         std::atomic<bool> stopMining(false);
@@ -494,7 +493,6 @@ void runPoolMining(double& walletBalance, double& poolPendingBalance, int& block
         saveGameState(walletBalance, blockIndex, difficulty, autoMineNext, autoDifficulty, targetHashrate, outputRate, isBanned, isSpeedModActive, isHackerModActive, inspectionWait, workerName, poolUrl);
     }
 
-    // --- BƯỚC 1: HANDSHAKE BAN ĐẦU VỚI POOL (CHỈ GỌI 1 LẦN DUY NHẤT) ---
     std::string joinUri = poolUrl + "/join?worker=" + workerName;
     std::string joinJson = execCurl("curl -s -L -A \"MinerClient\" -m 8 \"" + joinUri + "\"");
     
@@ -522,7 +520,6 @@ void runPoolMining(double& walletBalance, double& poolPendingBalance, int& block
               << "[SYSTEM] Starting at Block #" << activeWork.index << " | Difficulty: " << activeWork.diff << "/20 | Unclaimed: " << COLOR_YELLOW << std::fixed << std::setprecision(8) << poolPendingBalance << " BTC" << COLOR_RESET << "\n"
               << "[SYSTEM] Press [ENTER] at any time to abort.\n\n";
 
-    // --- BƯỚC 2: KHỞI TẠO SHARED STATE CHO THREAD PIPELINE ---
     std::atomic<bool> stopMining(false);
     std::atomic<long long> globalNonce(baseStart);
     std::atomic<bool> foundMatch(false);
@@ -538,7 +535,6 @@ void runPoolMining(double& walletBalance, double& poolPendingBalance, int& block
 
     auto blockStartTime = std::chrono::high_resolution_clock::now();
 
-    // --- BƯỚC 3: SPAWN WORKER THREADS MỘT LẦN DUY NHẤT (PERSISTENT THREADS) ---
     std::vector<std::thread> workers;
     workers.reserve(numThreads);
 
@@ -618,7 +614,6 @@ void runPoolMining(double& walletBalance, double& poolPendingBalance, int& block
         });
     }
 
-    // --- BƯỚC 4: VÒNG LẶP ĐIỀU KHIỂN NỀN (ZERO-DOWNTIME PIPELINE) ---
     auto lastSyncCheck = std::chrono::steady_clock::now();
     bool sessionActive = true;
 
@@ -628,7 +623,6 @@ void runPoolMining(double& walletBalance, double& poolPendingBalance, int& block
             break;
         }
 
-        // 1. Khi tìm thấy nonce chiến thắng
         if (foundMatch.load()) {
             auto blockEndTime = std::chrono::high_resolution_clock::now();
             double durationSec = std::chrono::duration<double>(blockEndTime - blockStartTime).count();
@@ -641,7 +635,6 @@ void runPoolMining(double& walletBalance, double& poolPendingBalance, int& block
                 sDiff = currentWork.diff;
             }
 
-            // Trên Windows CMD, dùng dấu ngoặc kép thoát chuỗi \" cho curl -d
             std::string payload = "{\\\"worker\\\":\\\"" + workerName + "\\\",\\\"block_index\\\":" + std::to_string(sIndex) + ",\\\"winning_nonce\\\":" + std::to_string(winningNonce) + ",\\\"duration_sec\\\":" + std::to_string(durationSec) + "}";
             std::string submitRes = execCurl("curl -s -L -A \"MinerClient\" -m 8 -X POST \"" + poolUrl + "/submit\" -H \"Content-Type: application/json\" -d \"" + payload + "\"");
 
@@ -714,7 +707,6 @@ void runPoolMining(double& walletBalance, double& poolPendingBalance, int& block
             }
         }
 
-        // 2. Poll định kỳ mỗi 1.5 giây để bắt nhịp block mới hoặc tín hiệu Fake Sync Epoch
         auto now = std::chrono::steady_clock::now();
         if (std::chrono::duration_cast<std::chrono::milliseconds>(now - lastSyncCheck).count() >= 1500) {
             lastSyncCheck = now;
@@ -760,7 +752,6 @@ void runPoolMining(double& walletBalance, double& poolPendingBalance, int& block
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
 
-    // --- DỌN DẸP KHI THOÁT ---
     stopMining = true;
     for (auto& th : workers) {
         if (th.joinable()) th.join();
@@ -875,7 +866,6 @@ void runPoolOptions(double& walletBalance, double& poolPendingBalance, int block
                     std::cin >> toWorker;
                 }
 
-                // Thoát chuỗi JSON đúng chuẩn Windows CMD
                 std::ostringstream payloadStream;
                 payloadStream << "{\\\"worker\\\":\\\"" << workerName << "\\\",\\\"option\\\":" << tMode << ",\\\"recipient\\\":\\\"" << toWorker << "\\\"}";
                 std::string payload = payloadStream.str();
@@ -909,7 +899,6 @@ void runPoolOptions(double& walletBalance, double& poolPendingBalance, int block
 }
 
 int main() {
-    // Bật hỗ trợ mã màu ANSI trên Windows CMD / PowerShell
     HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
     DWORD dwMode = 0;
     if (GetConsoleMode(hOut, &dwMode)) {
@@ -920,7 +909,6 @@ int main() {
     std::ios_base::sync_with_stdio(false);
     std::cin.tie(NULL);
 
-    // Tự động tạo sẵn thư mục Desktop\crypto_miner\mods
     try {
         std::filesystem::create_directories(MODS_DIR);
     } catch (...) {}
