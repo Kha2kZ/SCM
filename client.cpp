@@ -484,6 +484,7 @@ void runPoolMining(double& walletBalance, double& poolPendingBalance, int& block
         saveGameState(walletBalance, blockIndex, difficulty, autoMineNext, autoDifficulty, targetHashrate, outputRate, isBanned, isSpeedModActive, isHackerModActive, inspectionWait, workerName, poolUrl);
     }
 
+    // 1. Handshake ban đầu với Pool
     std::string joinUri = poolUrl + "/join?worker=" + workerName;
     std::string joinJson = execCurl("curl -s -L -A \"MinerClient\" -m 8 \"" + joinUri + "\"");
     
@@ -526,6 +527,7 @@ void runPoolMining(double& walletBalance, double& poolPendingBalance, int& block
 
     auto blockStartTime = std::chrono::high_resolution_clock::now();
 
+    // 2. Khởi tạo Persistent Worker Threads (Luồng cày không bao giờ chết, tối ưu hóa chia sẻ atomic)
     std::vector<std::thread> workers;
     workers.reserve(numThreads);
 
@@ -551,8 +553,98 @@ void runPoolMining(double& walletBalance, double& poolPendingBalance, int& block
                         base_state1 = computeASICStep32(base_state1, val);
                         base_state2 = computeASICStep32(base_state2, val * 31);
                     }
-                    globalNonce.store(baseStart, std::memory_order_relaxed);
-                    nextLogNonce.store(baseStart + outputRate, std::memory_order_relaxed);
+                    // KHÔNG reset globalNonce về baseStart nữa để tránh bị giật lùi/trùng lặp nonce giữa các luồng
+                    nextLogNonce.store(globalNonce.load(std::memory_order_relaxed) + outputRate, std::memory_order_relaxed);
+                }
+
+                if (foundMatch.load(std::memory_order_relaxed)) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));Dưới đây là phiên bản viết lại toàn bộ hàm `runPoolMining` dành riêng cho Linux/Termux, áp dụng cơ chế quản lý luồng chuẩn xác (dùng `compare_exchange_strong` để đồng bộ nonce toàn cục, chia batch tối ưu, không bị giật cục hay reset lùi nonce linh tinh như bản cũ):
+
+### Hàm `runPoolMining` tối ưu toàn diện cho Linux (`client.cpp`)
+
+Bạn hãy thay thế toàn bộ hàm `runPoolMining` cũ bằng đoạn code chuẩn chỉnh này:
+
+```cpp
+void runPoolMining(double& walletBalance, double& poolPendingBalance, int& blockIndex, int& difficulty, bool autoMineNext, bool autoDifficulty, long long targetHashrate, long long outputRate, bool isBanned, bool isSpeedModActive, bool isHackerModActive, bool inspectionWait, const std::string& workerName, std::string& poolUrl) {
+    if (poolUrl.empty()) {
+        std::cout << "\nEnter Pool URL (e.g., [http://vicky.hidencloud.com:24698](http://vicky.hidencloud.com:24698)): ";
+        std::cin >> poolUrl;
+        if (!poolUrl.empty() && poolUrl.back() == '/') poolUrl.pop_back();
+        saveGameState(walletBalance, blockIndex, difficulty, autoMineNext, autoDifficulty, targetHashrate, outputRate, isBanned, isSpeedModActive, isHackerModActive, inspectionWait, workerName, poolUrl);
+    }
+
+    // 1. Handshake lấy thông tin khởi tạo ban đầu từ Pool
+    std::string joinUri = poolUrl + "/join?worker=" + workerName;
+    std::string joinJson = execCurl("curl -s -L -A \"MinerClient\" -m 8 \"" + joinUri + "\"");
+    
+    if (joinJson.empty() || joinJson.find("worker_id") == std::string::npos) {
+        std::cout << COLOR_RED << "[ERROR] Cannot reach Pool Host at " << poolUrl << ".\n" << COLOR_RESET;
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+        return;
+    }
+
+    long long workerId = safeStoll(extractJsonValue(joinJson, "worker_id"), 0);
+    long long baseStart = safeStoll(extractJsonValue(joinJson, "base_start"), 0);
+    
+    WorkConfig activeWork;
+    activeWork.index = safeStoi(extractJsonValue(joinJson, "block_index"), 1);
+    activeWork.diff = safeStoi(extractJsonValue(joinJson, "difficulty"), 3);
+    activeWork.epoch = safeStoi(extractJsonValue(joinJson, "epoch"), 1);
+    activeWork.prevHash = extractJsonValue(joinJson, "previous_hash");
+    poolPendingBalance = safeStod(extractJsonValue(joinJson, "pool_balance"), 0.0);
+
+    clearScreen();
+    int numThreads = std::thread::hardware_concurrency();
+    if (numThreads < 1) numThreads = 4;
+
+    std::cout << "[SYSTEM] Zero-Downtime Consistent Pool Engine Active... (ID: " << workerId << " | Threads: " << numThreads << ")...\n"
+              << "[SYSTEM] Starting at Block #" << activeWork.index << " | Difficulty: " << activeWork.diff << "/20 | Epoch: #" << activeWork.epoch << "\n"
+              << "[SYSTEM] Press [ENTER] at any time to abort.\n\n";
+
+    std::atomic<bool> stopMining(false);
+    std::atomic<long long> globalNonce(baseStart);
+    std::atomic<bool> foundMatch(false);
+    std::atomic<int> workVersion(0);
+    std::atomic<long long> nextLogNonce(baseStart + outputRate);
+
+    WorkConfig currentWork = activeWork;
+    std::mutex workMutex;
+
+    long long winningNonce = -1;
+    std::string winningHash = "";
+    std::mutex coutMutex;
+
+    auto blockStartTime = std::chrono::high_resolution_clock::now();
+
+    // 2. Khởi tạo Persistent Worker Threads (Luồng cày chạy liên tục, đồng bộ Atomic mượt mà)
+    std::vector<std::thread> workers;
+    workers.reserve(numThreads);
+
+    for (int t = 0; t < numThreads; ++t) {
+        workers.emplace_back([&, t]() {
+            const long long batchSize = 50000;
+            int localVersion = -1;
+            WorkConfig localWork;
+            uint32_t base_state1 = 0, base_state2 = 0;
+
+            while (!stopMining) {
+                int v = workVersion.load(std::memory_order_acquire);
+                if (v != localVersion) {
+                    std::lock_guard<std::mutex> lock(workMutex);
+                    localWork = currentWork;
+                    localVersion = v;
+
+                    std::string basePrefix = localWork.prevHash + ":Block#" + std::to_string(localWork.index) + ":Nonce=";
+                    base_state1 = 2166136261UL;
+                    base_state2 = 3382945747UL;
+                    for (char c : basePrefix) {
+                        uint32_t val = static_cast<uint32_t>(c);
+                        base_state1 = computeASICStep32(base_state1, val);
+                        base_state2 = computeASICStep32(base_state2, val * 31);
+                    }
+                    // KHÔNG reset globalNonce về baseStart nếu không đổi block/epoch, 
+                    // giữ nguyên cơ chế tịnh tiến để tránh giật cục nonce!
+                    nextLogNonce.store(globalNonce.load(std::memory_order_relaxed) + outputRate, std::memory_order_relaxed);
                 }
 
                 if (foundMatch.load(std::memory_order_relaxed)) {
@@ -589,15 +681,14 @@ void runPoolMining(double& walletBalance, double& poolPendingBalance, int& block
                         break;
                     }
 
-                    if (currentNonce >= nextLogNonce.load(std::memory_order_relaxed)) {
-                        long long targetLog = nextLogNonce.load(std::memory_order_relaxed);
-                        if (currentNonce >= targetLog) {
-                            if (nextLogNonce.compare_exchange_strong(targetLog, targetLog + outputRate)) {
-                                std::string currentHashStr = formatHashToString(state1, state2);
-                                std::lock_guard<std::mutex> lock(coutMutex);
-                                std::cout << "nonce=" << COLOR_YELLOW << targetLog << COLOR_RESET
-                                          << " hash=" << COLOR_RED << currentHashStr << COLOR_RESET << "\n";
-                            }
+                    // Log tiến trình tịnh tiến mượt mà
+                    long long targetLog = nextLogNonce.load(std::memory_order_relaxed);
+                    if (currentNonce >= targetLog) {
+                        if (nextLogNonce.compare_exchange_strong(targetLog, targetLog + outputRate)) {
+                            std::string currentHashStr = formatHashToString(state1, state2);
+                            std::lock_guard<std::mutex> lock(coutMutex);
+                            std::cout << "nonce=" << COLOR_YELLOW << targetLog << COLOR_RESET
+                                      << " hash=" << COLOR_RED << currentHashStr << COLOR_RESET << "\n";
                         }
                     }
                 }
@@ -605,6 +696,7 @@ void runPoolMining(double& walletBalance, double& poolPendingBalance, int& block
         });
     }
 
+    // 3. Vòng lặp điều khiển nền & Polling Watchdog / Sync state từ Pool
     auto lastSyncCheck = std::chrono::steady_clock::now();
     bool sessionActive = true;
 
@@ -649,6 +741,9 @@ void runPoolMining(double& walletBalance, double& poolPendingBalance, int& block
                     blockIndex = static_cast<int>(currentWork.index);
                     difficulty = currentWork.diff;
                 }
+                
+                // Khi sang block mới, reset nonce tuyến tính về baseStart cho worker
+                globalNonce.store(baseStart, std::memory_order_relaxed);
                 workVersion.fetch_add(1, std::memory_order_release);
 
                 {
@@ -678,13 +773,14 @@ void runPoolMining(double& walletBalance, double& poolPendingBalance, int& block
                     blockIndex = static_cast<int>(currentWork.index);
                     difficulty = currentWork.diff;
                 }
+                globalNonce.store(baseStart, std::memory_order_relaxed);
                 workVersion.fetch_add(1, std::memory_order_release);
                 foundMatch.store(false);
                 blockStartTime = std::chrono::high_resolution_clock::now();
             }
         }
 
-        // Poll định kỳ mỗi 1.5s bắt tín hiệu Fake Sync Epoch từ Master Watchdog
+        // Poll định kỳ mỗi 1.5s bắt tín hiệu Watchdog / Fake Sync từ Master/Pool
         auto now = std::chrono::steady_clock::now();
         if (std::chrono::duration_cast<std::chrono::milliseconds>(now - lastSyncCheck).count() >= 1500) {
             lastSyncCheck = now;
@@ -714,6 +810,7 @@ void runPoolMining(double& walletBalance, double& poolPendingBalance, int& block
                         blockIndex = static_cast<int>(currentWork.index);
                         difficulty = currentWork.diff;
                     }
+                    globalNonce.store(baseStart, std::memory_order_relaxed);
                     workVersion.fetch_add(1, std::memory_order_release);
                     blockStartTime = std::chrono::high_resolution_clock::now();
 
