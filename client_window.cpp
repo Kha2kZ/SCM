@@ -722,6 +722,238 @@ void runPoolMining(double& walletBalance, double& poolPendingBalance, int& block
                 }
 
                 if (remoteBlock > localBlockIdx) {
+void runPoolMining(double& walletBalance, double& poolPendingBalance, int& blockIndex, int& difficulty, bool autoMineNext, bool autoDifficulty, long long targetHashrate, long long outputRate, bool isBanned, bool isSpeedModActive, bool isHackerModActive, bool inspectionWait, const std::string& workerName, std::string& poolUrl) {
+    if (poolUrl.empty()) {
+        std::cout << "\nEnter Pool URL (e.g., http://vicky.hidencloud.com:24698): ";
+        std::cin >> poolUrl;
+        if (!poolUrl.empty() && poolUrl.back() == '/') poolUrl.pop_back();
+        saveGameState(walletBalance, blockIndex, difficulty, autoMineNext, autoDifficulty, targetHashrate, outputRate, isBanned, isSpeedModActive, isHackerModActive, inspectionWait, workerName, poolUrl);
+    }
+
+    // 1. Handshake ban đầu với Pool để lấy thông tin epoch và độ khó hiện tại
+    std::string joinUri = poolUrl + "/join?worker=" + workerName;
+    std::string joinJson = execCurl("curl -s -L -A \"MinerClient\" -m 8 \"" + joinUri + "\"");
+    
+    if (joinJson.empty() || joinJson.find("worker_id") == std::string::npos) {
+        std::cout << COLOR_RED << "[ERROR] Cannot reach Pool Host at " << poolUrl << ".\n" << COLOR_RESET;
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+        return;
+    }
+
+    long long workerId = safeStoll(extractJsonValue(joinJson, "worker_id"), 0);
+    long long baseStart = safeStoll(extractJsonValue(joinJson, "base_start"), 0);
+    
+    WorkConfig activeWork;
+    activeWork.index = safeStoi(extractJsonValue(joinJson, "block_index"), 1);
+    activeWork.diff = safeStoi(extractJsonValue(joinJson, "difficulty"), 3);
+    activeWork.epoch = safeStoi(extractJsonValue(joinJson, "epoch"), 1);
+    activeWork.prevHash = extractJsonValue(joinJson, "previous_hash");
+    poolPendingBalance = safeStod(extractJsonValue(joinJson, "pool_balance"), 0.0);
+
+    clearScreen();
+    int numThreads = std::thread::hardware_concurrency();
+    if (numThreads < 1) numThreads = 4;
+
+    std::cout << "[SYSTEM] Zero-Downtime Pool Engine Active... (ID: " << workerId << " | Threads: " << numThreads << ")...\n"
+              << "[SYSTEM] Starting at Block #" << activeWork.index << " | Difficulty: " << activeWork.diff << "/20 | Epoch: #" << activeWork.epoch << "\n"
+              << "[SYSTEM] Press [ENTER] at any time to abort.\n\n";
+
+    std::atomic<bool> stopMining(false);
+    std::atomic<long long> globalNonce(baseStart);
+    std::atomic<bool> foundMatch(false);
+    std::atomic<int> workVersion(0);
+    std::atomic<long long> nextLogNonce(baseStart + outputRate);
+
+    WorkConfig currentWork = activeWork;
+    std::mutex workMutex;
+
+    long long winningNonce = -1;
+    std::string winningHash = "";
+    std::mutex coutMutex;
+
+    auto blockStartTime = std::chrono::high_resolution_clock::now();
+
+    // 2. Khởi tạo Persistent Worker Threads (Luồng cày không bao giờ chết)
+    std::vector<std::thread> workers;
+    workers.reserve(numThreads);
+
+    for (int t = 0; t < numThreads; ++t) {
+        workers.emplace_back([&, t]() {
+            const long long batchSize = 50000;
+            int localVersion = -1;
+            WorkConfig localWork;
+            uint32_t base_state1 = 0, base_state2 = 0;
+
+            while (!stopMining) {
+                int v = workVersion.load(std::memory_order_acquire);
+                if (v != localVersion) {
+                    std::lock_guard<std::mutex> lock(workMutex);
+                    localWork = currentWork;
+                    localVersion = v;
+
+                    std::string basePrefix = localWork.prevHash + ":Block#" + std::to_string(localWork.index) + ":Nonce=";
+                    base_state1 = 2166136261UL;
+                    base_state2 = 3382945747UL;
+                    for (char c : basePrefix) {
+                        uint32_t val = static_cast<uint32_t>(c);
+                        base_state1 = computeASICStep32(base_state1, val);
+                        base_state2 = computeASICStep32(base_state2, val * 31);
+                    }
+                    globalNonce.store(baseStart, std::memory_order_relaxed);
+                    nextLogNonce.store(baseStart + outputRate, std::memory_order_relaxed);
+                }
+
+                if (foundMatch.load(std::memory_order_relaxed)) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                    continue;
+                }
+
+                long long startNonce = globalNonce.fetch_add(batchSize, std::memory_order_relaxed);
+                long long endNonce = startNonce + batchSize;
+
+                for (long long currentNonce = startNonce; currentNonce < endNonce && !stopMining && !foundMatch.load(std::memory_order_relaxed); ++currentNonce) {
+                    if (workVersion.load(std::memory_order_relaxed) != localVersion) break;
+
+                    uint32_t nonceLow = static_cast<uint32_t>(currentNonce & 0xFFFFFFFF);
+                    uint32_t nonceHigh = static_cast<uint32_t>((currentNonce >> 32) & 0xFFFFFFFF);
+
+                    uint32_t state1 = computeASICStep32(base_state1, nonceLow);
+                    uint32_t state2 = computeASICStep32(base_state2, nonceHigh ^ nonceLow ^ 0x9e3779b9UL);
+
+                    state1 ^= (state2 << 11);
+                    state2 ^= (state1 >> 13);
+
+                    uint32_t part1 = state1 ^ (state2 >> 3);
+                    uint32_t part2 = state2 ^ (state1 << 3);
+                    uint32_t part3 = state1 * 3;
+                    uint32_t part4 = state2 * 5;
+
+                    if (checkDifficultyMatch(part1, part2, part3, part4, localWork.diff)) {
+                        bool expected = false;
+                        if (foundMatch.compare_exchange_strong(expected, true)) {
+                            winningNonce = currentNonce;
+                            winningHash = formatHashToString(state1, state2);
+                        }
+                        break;
+                    }
+
+                    if (currentNonce >= nextLogNonce.load(std::memory_order_relaxed)) {
+                        long long targetLog = nextLogNonce.load(std::memory_order_relaxed);
+                        if (currentNonce >= targetLog) {
+                            if (nextLogNonce.compare_exchange_strong(targetLog, targetLog + outputRate)) {
+                                std::string currentHashStr = formatHashToString(state1, state2);
+                                std::lock_guard<std::mutex> lock(coutMutex);
+                                std::cout << "nonce=" << COLOR_YELLOW << targetLog << COLOR_RESET
+                                          << " hash=" << COLOR_RED << currentHashStr << COLOR_RESET << "\n";
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    // 3. Vòng lặp điều khiển nền & Bắt tín hiệu Fake Sync từ Watchdog Master
+    auto lastSyncCheck = std::chrono::steady_clock::now();
+    bool sessionActive = true;
+
+    while (sessionActive) {
+        if (checkUserPressedEnter()) {
+            stopMining = true;
+            break;
+        }
+
+        // Xử lý khi tìm thấy nonce chiến thắng
+        if (foundMatch.load()) {
+            auto blockEndTime = std::chrono::high_resolution_clock::now();
+            double durationSec = std::chrono::duration<double>(blockEndTime - blockStartTime).count();
+
+            long long sIndex;
+            int sDiff;
+            {
+                std::lock_guard<std::mutex> lock(workMutex);
+                sIndex = currentWork.index;
+                sDiff = currentWork.diff;
+            }
+
+            std::string payload = "{\\\"worker\\\":\\\"" + workerName + "\\\",\\\"block_index\\\":" + std::to_string(sIndex) + ",\\\"winning_nonce\\\":" + std::to_string(winningNonce) + ",\\\"duration_sec\\\":" + std::to_string(durationSec) + "}";
+            std::string submitRes = execCurl("curl -s -L -A \"MinerClient\" -m 8 -X POST \"" + poolUrl + "/submit\" -H \"Content-Type: application/json\" -d \"" + payload + "\"");
+
+            std::string status = extractJsonValue(submitRes, "status");
+            double dynamicReward = 0.000005 * std::pow(1.6, sDiff - 1);
+
+            if (status == "accepted") {
+                poolPendingBalance = safeStod(extractJsonValue(submitRes, "pool_balance"), poolPendingBalance);
+
+                std::string nextBlockIdxStr = extractJsonValue(submitRes, "block_index");
+                std::string nextDiffStr = extractJsonValue(submitRes, "difficulty");
+                std::string nextEpochStr = extractJsonValue(submitRes, "epoch");
+                std::string nextPrevHash = extractJsonValue(submitRes, "previous_hash");
+
+                {
+                    std::lock_guard<std::mutex> lock(workMutex);
+                    if (!nextBlockIdxStr.empty()) currentWork.index = safeStoi(nextBlockIdxStr, currentWork.index + 1);
+                    if (!nextDiffStr.empty()) currentWork.diff = safeStoi(nextDiffStr, currentWork.diff);
+                    if (!nextEpochStr.empty()) currentWork.epoch = safeStoi(nextEpochStr, currentWork.epoch + 1);
+                    if (!nextPrevHash.empty()) currentWork.prevHash = nextPrevHash;
+                    blockIndex = static_cast<int>(currentWork.index);
+                    difficulty = currentWork.diff;
+                }
+                workVersion.fetch_add(1, std::memory_order_release);
+
+                {
+                    std::lock_guard<std::mutex> lock(coutMutex);
+                    std::cout << "\n----------------------------------------\n"
+                              << "[" << getCurrentTime() << "] [Block #" << sIndex << "] SOLVED BY [" << COLOR_CYAN << workerName << COLOR_RESET << "] (DIFF " << sDiff << "/20)!\n"
+                              << " > winning_nonce : " << COLOR_YELLOW << winningNonce << COLOR_RESET << "\n"
+                              << " > target_hash   : " << COLOR_GREEN << winningHash << COLOR_RESET << "\n"
+                              << " > time_taken    : " << std::fixed << std::setprecision(2) << durationSec << " s\n"
+                              << " > pool_balance  : " << COLOR_YELLOW << std::fixed << std::setprecision(8) << poolPendingBalance << " BTC" << COLOR_RESET << "\n"
+                              << " > next_block    : #" << blockIndex << " (Diff: " << difficulty << ")\n"
+                              << "----------------------------------------\n\n";
+                }
+
+                saveGameState(walletBalance, blockIndex, difficulty, autoMineNext, autoDifficulty, targetHashrate, outputRate, isBanned, isSpeedModActive, isHackerModActive, inspectionWait, workerName, poolUrl);
+                foundMatch.store(false);
+                blockStartTime = std::chrono::high_resolution_clock::now();
+            } else {
+                // Stale block -> Đồng bộ lại ngay lập tức
+                std::string statusJson = execCurl("curl -s -L -A \"MinerClient\" -m 3 \"" + poolUrl + "/?worker=" + workerName + "\"");
+                if (!statusJson.empty() && statusJson.find("block") != std::string::npos) {
+                    std::lock_guard<std::mutex> lock(workMutex);
+                    currentWork.index = safeStoi(extractJsonValue(statusJson, "block"), currentWork.index);
+                    currentWork.diff = safeStoi(extractJsonValue(statusJson, "difficulty"), currentWork.diff);
+                    currentWork.epoch = safeStoi(extractJsonValue(statusJson, "epoch"), currentWork.epoch);
+                    std::string rPrev = extractJsonValue(statusJson, "previous_hash");
+                    if (!rPrev.empty()) currentWork.prevHash = rPrev;
+                    blockIndex = static_cast<int>(currentWork.index);
+                    difficulty = currentWork.diff;
+                }
+                workVersion.fetch_add(1, std::memory_order_release);
+                foundMatch.store(false);
+                blockStartTime = std::chrono::high_resolution_clock::now();
+            }
+        }
+
+        // Kiểm tra định kỳ mỗi 1.5 giây để nhận diện Fake Sync Epoch từ Master (khi quá 10 phút kẹt độ khó)
+        auto now = std::chrono::steady_clock::now();
+        if (std::chrono::duration_cast<std::chrono::milliseconds>(now - lastSyncCheck).count() >= 1500) {
+            lastSyncCheck = now;
+            std::string statusJson = execCurl("curl -s -L -A \"MinerClient\" -m 2 \"" + poolUrl + "/?worker=" + workerName + "\"");
+            if (!statusJson.empty() && statusJson.find("block") != std::string::npos) {
+                long long remoteBlock = safeStoi(extractJsonValue(statusJson, "block"), 0);
+                int remoteEpoch = safeStoi(extractJsonValue(statusJson, "epoch"), 0);
+                
+                long long localBlockIdx;
+                int localEpoch;
+                {
+                    std::lock_guard<std::mutex> lock(workMutex);
+                    localBlockIdx = currentWork.index;
+                    localEpoch = currentWork.epoch;
+                }
+
+                // Nếu phát hiện epoch tăng (do Watchdog Master ép giảm độ khó) HOẶC có block mới
+                if (remoteBlock > localBlockIdx || remoteEpoch > localEpoch) {
                     std::string remotePrevHash = extractJsonValue(statusJson, "previous_hash");
                     int remoteDiff = safeStoi(extractJsonValue(statusJson, "difficulty"), 3);
 
@@ -729,15 +961,20 @@ void runPoolMining(double& walletBalance, double& poolPendingBalance, int& block
                         std::lock_guard<std::mutex> lock(workMutex);
                         currentWork.index = remoteBlock;
                         currentWork.diff = remoteDiff;
+                        currentWork.epoch = remoteEpoch;
                         if (!remotePrevHash.empty()) currentWork.prevHash = remotePrevHash;
                         blockIndex = static_cast<int>(currentWork.index);
                         difficulty = currentWork.diff;
                     }
-                    workVersion.fetch_add(1, std::memory_order_release);
+                    workVersion.fetch_add(1, std::memory_order_release); // Lập tức báo hiệu các worker thread reset state và băm lại từ đầu
                     blockStartTime = std::chrono::high_resolution_clock::now();
 
                     std::lock_guard<std::mutex> lock(coutMutex);
-                    std::cout << COLOR_CYAN << "\n[" << getCurrentTime() << "] [SYNC] Peer solved block! Switched to Block #" << remoteBlock << " (Diff: " << remoteDiff << ") instantly!\n" << COLOR_RESET << std::flush;
+                    if (remoteBlock > localBlockIdx) {
+                        std::cout << COLOR_CYAN << "\n[" << getCurrentTime() << "] [SYNC] New block detected! Switched to Block #" << remoteBlock << " (Diff: " << remoteDiff << ") instantly!\n" << COLOR_RESET;
+                    } else {
+                        std::cout << COLOR_MAGENTA << "\n[" << getCurrentTime() << "] [SYNC] Master Watchdog triggered timeout! Difficulty dropped to " << remoteDiff << "/20. Restarting block from nonce 0...\n" << COLOR_RESET;
+                    }
                 }
             }
         }
@@ -745,7 +982,6 @@ void runPoolMining(double& walletBalance, double& poolPendingBalance, int& block
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
 
-    // --- DỌN DẸP KHI THOÁT ---
     stopMining = true;
     for (auto& th : workers) {
         if (th.joinable()) th.join();
