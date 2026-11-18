@@ -626,8 +626,6 @@ void runPoolMining(double& walletBalance, double& poolPendingBalance, int& block
                 sDiff = currentWork.diff;
             }
 
-            std::string payload = "{\"worker\":\"" + workerName + "\",\"block_index\":" + std::to_string(sIndex) + ",\"winning_nonce\\":" + std::to_string(winningNonce) + ",\"duration_sec\":" + std::to_string(durationSec) + "}";
-            // Trên Linux/Termux dùng nháy kép bình thường không cần escape phức tạp như Windows
             std::string curlCmd = "curl -s -L -A \"MinerClient\" -m 8 -X POST \"" + poolUrl + "/submit\" -H \"Content-Type: application/json\" -d '{\"worker\":\"" + workerName + "\",\"block_index\":" + std::to_string(sIndex) + ",\"winning_nonce\":" + std::to_string(winningNonce) + ",\"duration_sec\":" + std::to_string(durationSec) + "}'";
             std::string submitRes = execCurl(curlCmd);
 
