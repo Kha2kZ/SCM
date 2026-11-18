@@ -54,6 +54,7 @@ const std::string POOL_TOKEN = "tk_706f6f6c6d696e696e67";
 struct WorkConfig {
     long long index = 1;
     int diff = 3;
+	int epoch = 1;
     std::string prevHash = "";
 };
 
