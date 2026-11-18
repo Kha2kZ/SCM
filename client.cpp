@@ -1,4 +1,3 @@
-#define SDL_MAIN_HANDLED
 #include <iostream>
 #include <string>
 #include <chrono>
@@ -16,11 +15,8 @@
 #include <cstdio>
 #include <algorithm>
 #include <cctype>
-#include <poll.h>
 #include <unistd.h>
-#include <sched.h>
-#include <pthread.h>
-#include <sys/resource.h>
+#include <poll.h>
 
 #define COLOR_RESET   "\033[0m"
 #define COLOR_RED     "\033[31m"
@@ -29,27 +25,26 @@
 #define COLOR_CYAN    "\033[36m"
 #define COLOR_MAGENTA "\033[35m"
 
-const std::string SAVE_FILE_PATH = "/storage/emulated/0/crypto_miner/financial_report.json";
-const std::string SPEED_MOD_PATH = "/storage/emulated/0/crypto_miner/mods/unlimited_speed.mod";
-const std::string HACKER_MOD_PATH = "/storage/emulated/0/crypto_miner/mods/hacker.mod";
-const std::string POOL_MOD_PATH = "/storage/emulated/0/crypto_miner/mods/pool_mining.mod";
+const std::string BASE_DIR        = "/storage/emulated/0/crypto_miner";
+const std::string MODS_DIR        = BASE_DIR + "/mods";
+const std::string SAVE_FILE_PATH  = BASE_DIR + "/financial_report.json";
+const std::string SPEED_MOD_PATH  = MODS_DIR + "/unlimited_speed.mod";
+const std::string HACKER_MOD_PATH = MODS_DIR + "/hacker.mod";
+const std::string POOL_MOD_PATH   = MODS_DIR + "/pool_mining.mod";
 
-const std::string SPEED_TOKEN = "tk_756e6e696d697465647370656564";
-const std::string HACKER_TOKEN = "tk_6861636b657270616e656c";
-const std::string POOL_TOKEN = "tk_706f6f6c6d696e696e67";
+const std::string SPEED_TOKEN  = "tk_756e6e696d697465647370656564";
+const std::string HACKER_TOKEN = "KHAI_HACKER_ADMIN_2026";
+const std::string POOL_TOKEN   = "tk_706f6f6c6d696e696e67";
 
 struct WorkConfig {
     long long index = 1;
     int diff = 3;
+    int epoch = 1;
     std::string prevHash = "";
 };
 
 void clearScreen() {
-#ifdef _WIN32
-    system("cls");
-#else
     system("clear");
-#endif
 }
 
 std::string getCurrentTime() {
@@ -440,7 +435,7 @@ void runLocalMining(double& walletBalance, int& blockIndex, int& difficulty, boo
                       << " > winning_nonce : " << COLOR_YELLOW << winningNonce << COLOR_RESET << "\n"
                       << " > target_hash   : " << COLOR_GREEN << winningHash << COLOR_RESET << "\n"
                       << " > time_taken    : " << std::fixed << std::setprecision(2) << durationSec << " s\n"
-                      << " > reward_added  : +" << std::fixed << std::setprecision(8) << dynamicReward << " BTC (Exponential Tier)\n"
+                      << " > reward_added  : +" << std::fixed << std::setprecision(8) << dynamicReward << " BTC\n"
                       << "----------------------------------------\n";
 
             walletBalance += dynamicReward;
@@ -467,7 +462,6 @@ void runLocalMining(double& walletBalance, int& blockIndex, int& difficulty, boo
 
             if (!autoMineNext) {
                 std::cout << "Press [ENTER] to return to menu...";
-                std::cin.ignore(10000, '\n');
                 std::cin.get();
                 miningSession = false;
             } else {
@@ -484,7 +478,7 @@ void runLocalMining(double& walletBalance, int& blockIndex, int& difficulty, boo
 
 void runPoolMining(double& walletBalance, double& poolPendingBalance, int& blockIndex, int& difficulty, bool autoMineNext, bool autoDifficulty, long long targetHashrate, long long outputRate, bool isBanned, bool isSpeedModActive, bool isHackerModActive, bool inspectionWait, const std::string& workerName, std::string& poolUrl) {
     if (poolUrl.empty()) {
-        std::cout << "\nEnter Pool URL (e.g., http://ip:24698): ";
+        std::cout << "\nEnter Pool URL (e.g., http://vicky.hidencloud.com:24698): ";
         std::cin >> poolUrl;
         if (!poolUrl.empty() && poolUrl.back() == '/') poolUrl.pop_back();
         saveGameState(walletBalance, blockIndex, difficulty, autoMineNext, autoDifficulty, targetHashrate, outputRate, isBanned, isSpeedModActive, isHackerModActive, inspectionWait, workerName, poolUrl);
@@ -505,6 +499,7 @@ void runPoolMining(double& walletBalance, double& poolPendingBalance, int& block
     WorkConfig activeWork;
     activeWork.index = safeStoi(extractJsonValue(joinJson, "block_index"), 1);
     activeWork.diff = safeStoi(extractJsonValue(joinJson, "difficulty"), 3);
+    activeWork.epoch = safeStoi(extractJsonValue(joinJson, "epoch"), 1);
     activeWork.prevHash = extractJsonValue(joinJson, "previous_hash");
     poolPendingBalance = safeStod(extractJsonValue(joinJson, "pool_balance"), 0.0);
 
@@ -513,7 +508,7 @@ void runPoolMining(double& walletBalance, double& poolPendingBalance, int& block
     if (numThreads < 1) numThreads = 4;
 
     std::cout << "[SYSTEM] Zero-Downtime Pool Engine Active... (ID: " << workerId << " | Threads: " << numThreads << ")...\n"
-              << "[SYSTEM] Starting at Block #" << activeWork.index << " | Difficulty: " << activeWork.diff << "/20 | Unclaimed: " << COLOR_YELLOW << std::fixed << std::setprecision(8) << poolPendingBalance << " BTC" << COLOR_RESET << "\n"
+              << "[SYSTEM] Starting at Block #" << activeWork.index << " | Difficulty: " << activeWork.diff << "/20 | Epoch: #" << activeWork.epoch << "\n"
               << "[SYSTEM] Press [ENTER] at any time to abort.\n\n";
 
     std::atomic<bool> stopMining(false);
@@ -631,8 +626,10 @@ void runPoolMining(double& walletBalance, double& poolPendingBalance, int& block
                 sDiff = currentWork.diff;
             }
 
-            std::string payload = "{\"worker\":\"" + workerName + "\",\"block_index\":" + std::to_string(sIndex) + ",\"winning_nonce\":" + std::to_string(winningNonce) + ",\"duration_sec\":" + std::to_string(durationSec) + "}";
-            std::string submitRes = execCurl("curl -s -L -A \"MinerClient\" -m 8 -X POST \"" + poolUrl + "/submit\" -H \"Content-Type: application/json\" -d '" + payload + "'");
+            std::string payload = "{\"worker\":\"" + workerName + "\",\"block_index\":" + std::to_string(sIndex) + ",\"winning_nonce\\":" + std::to_string(winningNonce) + ",\"duration_sec\":" + std::to_string(durationSec) + "}";
+            // Trên Linux/Termux dùng nháy kép bình thường không cần escape phức tạp như Windows
+            std::string curlCmd = "curl -s -L -A \"MinerClient\" -m 8 -X POST \"" + poolUrl + "/submit\" -H \"Content-Type: application/json\" -d '{\"worker\":\"" + workerName + "\",\"block_index\":" + std::to_string(sIndex) + ",\"winning_nonce\":" + std::to_string(winningNonce) + ",\"duration_sec\":" + std::to_string(durationSec) + "}'";
+            std::string submitRes = execCurl(curlCmd);
 
             std::string status = extractJsonValue(submitRes, "status");
             double dynamicReward = 0.000005 * std::pow(1.6, sDiff - 1);
@@ -642,14 +639,16 @@ void runPoolMining(double& walletBalance, double& poolPendingBalance, int& block
 
                 std::string nextBlockIdxStr = extractJsonValue(submitRes, "block_index");
                 std::string nextDiffStr = extractJsonValue(submitRes, "difficulty");
+                std::string nextEpochStr = extractJsonValue(submitRes, "epoch");
                 std::string nextPrevHash = extractJsonValue(submitRes, "previous_hash");
 
                 {
                     std::lock_guard<std::mutex> lock(workMutex);
                     if (!nextBlockIdxStr.empty()) currentWork.index = safeStoi(nextBlockIdxStr, currentWork.index + 1);
                     if (!nextDiffStr.empty()) currentWork.diff = safeStoi(nextDiffStr, currentWork.diff);
+                    if (!nextEpochStr.empty()) currentWork.epoch = safeStoi(nextEpochStr, currentWork.epoch + 1);
                     if (!nextPrevHash.empty()) currentWork.prevHash = nextPrevHash;
-                    blockIndex = currentWork.index;
+                    blockIndex = static_cast<int>(currentWork.index);
                     difficulty = currentWork.diff;
                 }
                 workVersion.fetch_add(1, std::memory_order_release);
@@ -661,37 +660,24 @@ void runPoolMining(double& walletBalance, double& poolPendingBalance, int& block
                               << " > winning_nonce : " << COLOR_YELLOW << winningNonce << COLOR_RESET << "\n"
                               << " > target_hash   : " << COLOR_GREEN << winningHash << COLOR_RESET << "\n"
                               << " > time_taken    : " << std::fixed << std::setprecision(2) << durationSec << " s\n"
-                              << " > reward_added  : +" << std::fixed << std::setprecision(8) << dynamicReward << " BTC\n"
                               << " > pool_balance  : " << COLOR_YELLOW << std::fixed << std::setprecision(8) << poolPendingBalance << " BTC" << COLOR_RESET << "\n"
                               << " > next_block    : #" << blockIndex << " (Diff: " << difficulty << ")\n"
                               << "----------------------------------------\n\n";
                 }
 
                 saveGameState(walletBalance, blockIndex, difficulty, autoMineNext, autoDifficulty, targetHashrate, outputRate, isBanned, isSpeedModActive, isHackerModActive, inspectionWait, workerName, poolUrl);
-
-                if (!autoMineNext) {
-                    std::cout << "Press [ENTER] to return to menu...";
-                    std::cin.ignore(10000, '\n');
-                    std::cin.get();
-                    stopMining = true;
-                    break;
-                }
-
                 foundMatch.store(false);
                 blockStartTime = std::chrono::high_resolution_clock::now();
             } else {
-                {
-                    std::lock_guard<std::mutex> lock(coutMutex);
-                    std::cout << COLOR_RED << "\n[REJECTED] Stale Block or Timeout. Resyncing instantly...\n" << COLOR_RESET;
-                }
-                std::string statusJson = execCurl("curl -s -L -A \"MinerClient\" -m 3 \"" + poolUrl + "/\"");
+                std::string statusJson = execCurl("curl -s -L -A \"MinerClient\" -m 3 \"" + poolUrl + "/?worker=" + workerName + "\"");
                 if (!statusJson.empty() && statusJson.find("block") != std::string::npos) {
                     std::lock_guard<std::mutex> lock(workMutex);
                     currentWork.index = safeStoi(extractJsonValue(statusJson, "block"), currentWork.index);
                     currentWork.diff = safeStoi(extractJsonValue(statusJson, "difficulty"), currentWork.diff);
+                    currentWork.epoch = safeStoi(extractJsonValue(statusJson, "epoch"), currentWork.epoch);
                     std::string rPrev = extractJsonValue(statusJson, "previous_hash");
                     if (!rPrev.empty()) currentWork.prevHash = rPrev;
-                    blockIndex = currentWork.index;
+                    blockIndex = static_cast<int>(currentWork.index);
                     difficulty = currentWork.diff;
                 }
                 workVersion.fetch_add(1, std::memory_order_release);
@@ -700,19 +686,24 @@ void runPoolMining(double& walletBalance, double& poolPendingBalance, int& block
             }
         }
 
+        // Poll định kỳ mỗi 1.5s bắt tín hiệu Fake Sync Epoch từ Master Watchdog
         auto now = std::chrono::steady_clock::now();
         if (std::chrono::duration_cast<std::chrono::milliseconds>(now - lastSyncCheck).count() >= 1500) {
             lastSyncCheck = now;
-            std::string statusJson = execCurl("curl -s -L -A \"MinerClient\" -m 2 \"" + poolUrl + "/\"");
+            std::string statusJson = execCurl("curl -s -L -A \"MinerClient\" -m 2 \"" + poolUrl + "/?worker=" + workerName + "\"");
             if (!statusJson.empty() && statusJson.find("block") != std::string::npos) {
                 long long remoteBlock = safeStoi(extractJsonValue(statusJson, "block"), 0);
+                int remoteEpoch = safeStoi(extractJsonValue(statusJson, "epoch"), 0);
+                
                 long long localBlockIdx;
+                int localEpoch;
                 {
                     std::lock_guard<std::mutex> lock(workMutex);
                     localBlockIdx = currentWork.index;
+                    localEpoch = currentWork.epoch;
                 }
 
-                if (remoteBlock > localBlockIdx) {
+                if (remoteBlock > localBlockIdx || remoteEpoch > localEpoch) {
                     std::string remotePrevHash = extractJsonValue(statusJson, "previous_hash");
                     int remoteDiff = safeStoi(extractJsonValue(statusJson, "difficulty"), 3);
 
@@ -720,15 +711,20 @@ void runPoolMining(double& walletBalance, double& poolPendingBalance, int& block
                         std::lock_guard<std::mutex> lock(workMutex);
                         currentWork.index = remoteBlock;
                         currentWork.diff = remoteDiff;
+                        currentWork.epoch = remoteEpoch;
                         if (!remotePrevHash.empty()) currentWork.prevHash = remotePrevHash;
-                        blockIndex = currentWork.index;
+                        blockIndex = static_cast<int>(currentWork.index);
                         difficulty = currentWork.diff;
                     }
                     workVersion.fetch_add(1, std::memory_order_release);
                     blockStartTime = std::chrono::high_resolution_clock::now();
 
                     std::lock_guard<std::mutex> lock(coutMutex);
-                    std::cout << COLOR_CYAN << "\n[" << getCurrentTime() << "] [SYNC] Peer solved block! Switched to Block #" << remoteBlock << " (Diff: " << remoteDiff << ") instantly!\n" << COLOR_RESET;
+                    if (remoteBlock > localBlockIdx) {
+                        std::cout << COLOR_CYAN << "\n[" << getCurrentTime() << "] [SYNC] New block detected! Switched to Block #" << remoteBlock << " (Diff: " << remoteDiff << ") instantly!\n" << COLOR_RESET;
+                    } else {
+                        std::cout << COLOR_MAGENTA << "\n[" << getCurrentTime() << "] [SYNC] Master Watchdog triggered timeout! Difficulty dropped to " << remoteDiff << "/20. Restarting block from nonce 0...\n" << COLOR_RESET;
+                    }
                 }
             }
         }
@@ -850,11 +846,8 @@ void runPoolOptions(double& walletBalance, double& poolPendingBalance, int block
                     std::cin >> toWorker;
                 }
 
-                std::ostringstream payloadStream;
-                payloadStream << "{\"worker\":\"" << workerName << "\",\"option\":" << tMode << ",\"recipient\":\"" << toWorker << "\"}";
-                std::string payload = payloadStream.str();
-
-                std::string res = execCurl("curl -s -L -A \"MinerClient\" -m 8 -X POST \"" + poolUrl + "/transfer\" -H \"Content-Type: application/json\" -d '" + payload + "'");
+                std::string curlCmd = "curl -s -L -A \"MinerClient\" -m 8 -X POST \"" + poolUrl + "/transfer\" -H \"Content-Type: application/json\" -d '{\"worker\":\"" + workerName + "\",\"option\":" + std::to_string(tMode) + ",\"recipient\":\"" + toWorker + "\"}'";
+                std::string res = execCurl(curlCmd);
                 
                 std::string status = extractJsonValue(res, "status");
                 std::string action = extractJsonValue(res, "action");
@@ -887,7 +880,7 @@ int main() {
     std::cin.tie(NULL);
 
     try {
-        std::filesystem::create_directories("/storage/emulated/0/crypto_miner/mods");
+        std::filesystem::create_directories(MODS_DIR);
     } catch (...) {}
 
     int difficulty = 3; 
@@ -900,7 +893,7 @@ int main() {
     double poolPendingBalance = 0.0;
     int blockIndex = 1; 
     bool isBanned = false; 
-    std::string workerName = "Node_01";
+    std::string workerName = "TVBox_Node";
     std::string poolUrl = "";
 
     bool isSpeedModActive = verifyMod(SPEED_MOD_PATH, SPEED_TOKEN);
@@ -923,7 +916,6 @@ int main() {
                   << "Your config file has been found as compromised/modified illegally, programme locked permanently and your data has been wiped. To continue, delete the existing configs file.\n"
                   << COLOR_RESET;
         std::cout << "\nPress ENTER to exit program...";
-        std::cin.ignore(10000, '\n');
         std::cin.get();
         return 0;
     }
@@ -935,12 +927,13 @@ int main() {
         if (hardwareCores < 1) hardwareCores = 4;
 
         if (!isPoolModActive) {
-            std::cout << "> miner_main_menu\n"
+            std::cout << "> miner_main_menu (Linux / Termux Edition)\n"
                       << "----------------------------------------\n"
                       << " [1] start_mining\n"
                       << " [2] options\n"
                       << " [3] quit\n"
                       << "----------------------------------------\n"
+                      << "data_dir      : " << BASE_DIR << "\n"
                       << "wallet_balance: " << std::fixed << std::setprecision(8) << walletBalance << " BTC\n"
                       << "current_hash  : " << (isSpeedModActive ? "UNLIMITED [RAW SPEED MOD]" : std::to_string(targetHashrate) + " H/s") << "\n"
                       << "cpu_threads   : " << hardwareCores << " Cores (Native Optimized)\n"
@@ -965,7 +958,7 @@ int main() {
                 runLocalMining(walletBalance, blockIndex, difficulty, autoMineNext, autoDifficulty, targetHashrate, outputRate, isBanned, isSpeedModActive, isHackerModActive, inspectionWait, workerName, poolUrl);
             }
         } else {
-            std::cout << "> miner_main_menu\n"
+            std::cout << "> miner_main_menu (Linux / Termux Edition)\n"
                       << "----------------------------------------\n"
                       << " [1] solo_mining\n"
                       << " [2] pool_mining\n"
@@ -973,6 +966,7 @@ int main() {
                       << " [4] pool_options\n"
                       << " [5] quit\n"
                       << "----------------------------------------\n"
+                      << "data_dir      : " << BASE_DIR << "\n"
                       << "worker_id     : " << COLOR_CYAN << workerName << COLOR_RESET << "\n"
                       << "pool_host     : " << (poolUrl.empty() ? "Not Configured" : poolUrl) << "\n"
                       << "wallet_balance: " << std::fixed << std::setprecision(8) << walletBalance << " BTC\n"
