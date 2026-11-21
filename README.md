@@ -1,4 +1,4 @@
-#CLI-BASED POW CRYPTO MINER
+### CLI-BASED POW CRYPTO MINER ###
 
 A high-performance, multi-threaded C++ Proof-of-Work (PoW) mining system featuring native ASIC-style hashing, solo and HTTP REST pool mining pipelines, and an external file-based Mod Loader.
 
