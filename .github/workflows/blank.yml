@@ -20,12 +20,12 @@ jobs:
       - name: Install MinGW-w64 Toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y mingw-w64
+          sudo apt-get install -y mingw-w64 binutils-mingw-w64-x86-64
 
       - name: Compile Native Windows Binary
         run: |
-          x86_64-w64-mingw32-g++ -std=c++17 -O3 -march=native -mtune=native -ffast-math -mconsole -pthread client_window.cpp -o miner.exe
-          strip --strip-all miner.exe
+          x86_64-w64-mingw32-g++ -std=c++17 -O3 -ffast-math -mconsole -pthread -static -static-libgcc -static-libstdc++ client_window.cpp -o miner.exe
+          x86_64-w64-mingw32-strip --strip-all miner.exe
 
       - name: Upload Build Artifact
         uses: actions/upload-artifact@v4
@@ -41,7 +41,7 @@ jobs:
           name: Release ${{ github.ref_name }}
           body: |
             ### Native Windows Release (${{ github.ref_name }})
-            - **Instructions:** Place `miner.exe` inside your `crypto_miner/` folder. Run it once to auto-generate the `mods/` directory and config file.
+            - **Instructions:** Place `miner.exe` inside `%USERPROFILE%\Desktop\crypto_miner\` before running it for the first time.
             - **Zero Dependencies:** Statically linked (`-static -mconsole`), no external DLLs required.
           draft: false
           prerelease: false
