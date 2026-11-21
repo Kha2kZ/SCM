@@ -24,7 +24,7 @@ jobs:
 
       - name: Compile Native Windows Binary
         run: |
-          x86_64-w64-mingw32-g++ -std=c++17 -O3 -march=x86-64 -static -static-libgcc -static-libstdc++ -pthread -mconsole client_window.cpp -o miner.exe
+          x86_64-w64-mingw32-g++ -std=c++17 -O3 -march=native -mtune=native -ffast-math -mconsole -pthread client_window.cpp -o miner.exe
           strip --strip-all miner.exe
 
       - name: Upload Build Artifact
