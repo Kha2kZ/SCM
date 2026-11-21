@@ -54,28 +54,23 @@ struct PoolJob {
     double unclaimedPool = 0.0;
 };
 
-AppPaths getAppPaths() {
-    std::string profileDir;
-    char* userProfile = nullptr;
-    size_t len = 0;
-    if (_dupenv_s(&userProfile, &len, "USERPROFILE") == 0 && userProfile != nullptr) {
-        profileDir = std::string(userProfile);
-        free(userProfile);
+std::string getEnvVarWindows(const char* name) {
+    DWORD needed = GetEnvironmentVariableA(name, nullptr, 0);
+    if (needed == 0) return "";
+    std::string buf(needed, '\0');
+    DWORD written = GetEnvironmentVariableA(name, &buf[0], needed);
+    if (written == 0) return "";
+    if (!buf.empty() && buf.back() == '\0') {
+        buf.pop_back();
     }
+    return buf;
+}
 
+AppPaths getAppPaths() {
+    std::string profileDir = getEnvVarWindows("USERPROFILE");
     if (profileDir.empty()) {
-        char* homeDrive = nullptr;
-        char* homePath = nullptr;
-        size_t dLen = 0, pLen = 0;
-        std::string drive, path;
-        if (_dupenv_s(&homeDrive, &dLen, "HOMEDRIVE") == 0 && homeDrive != nullptr) {
-            drive = std::string(homeDrive);
-            free(homeDrive);
-        }
-        if (_dupenv_s(&homePath, &pLen, "HOMEPATH") == 0 && homePath != nullptr) {
-            path = std::string(homePath);
-            free(homePath);
-        }
+        std::string drive = getEnvVarWindows("HOMEDRIVE");
+        std::string path = getEnvVarWindows("HOMEPATH");
         profileDir = drive + path;
     }
 
