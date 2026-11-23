@@ -297,14 +297,25 @@ std::string httpGetJson(const std::string& url, int timeoutSec = 8) {
 }
 
 std::string httpPostJson(const std::string& url, const std::string& jsonBody, int timeoutSec = 8) {
+    AppPaths paths = getAppPaths();
+    std::string tempFile = paths.baseDir + "\\curl_payload.json";
+
+    std::ofstream out(tempFile, std::ios::out | std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) return "";
+    out.write(jsonBody.data(), static_cast<std::streamsize>(jsonBody.size()));
+    out.close();
+
     std::string safeUrl = escapeWindowsCmdDoubleQuote(url);
-    std::string safeBody = escapeWindowsCmdDoubleQuote(jsonBody);
+    std::string safeFile = escapeWindowsCmdDoubleQuote(tempFile);
     std::string cmd = "curl -sS -L -A \"MinerClient\" -H \"Accept: application/json\" -H \"Content-Type: application/json\" -m "
-                      + std::to_string(timeoutSec) + " -X POST \"" + safeUrl + "\" --data-raw \"" + safeBody + "\" 2>NUL";
+                      + std::to_string(timeoutSec) + " -X POST \"" + safeUrl + "\" --data-binary \"@" + safeFile + "\" 2>NUL";
     std::string raw = execCurl(cmd);
+
+    std::error_code ec;
+    std::filesystem::remove(tempFile, ec);
+
     return sanitizeJsonPayload(raw);
 }
-
 // Parse JSON value theo key (hỗ trợ khoảng trắng quanh ':', chuỗi escaped, số, boolean, nested object/array)
 std::string extractJsonValue(const std::string& rawJson, const std::string& key) {
     std::string json = sanitizeJsonPayload(rawJson);
