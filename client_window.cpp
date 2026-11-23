@@ -1034,7 +1034,7 @@ void runPoolOptions(const std::string& saveFilePath, double& walletBalance, doub
 
 int main() {
     std::ios_base::sync_with_stdio(false);
-    std::cin.tie(NULL);
+    std::cin.tie(&std::cout);
     enableAnsiColors();
 
     AppPaths paths = getAppPaths();
