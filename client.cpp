@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cstdio>
 #include <algorithm>
+#include <limits>
 #include <poll.h>
 #include <unistd.h>
 
@@ -49,12 +50,32 @@ struct PoolJob {
 	double unclaimedPool = 0.0;
 };
 
+inline void flushOut() {
+	std::cout.flush();
+	std::fflush(stdout);
+}
+
+inline void discardRestOfLine() {
+	std::cin.clear();
+	std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+}
+
+inline void waitForEnter(const std::string& prompt = "Press [ENTER] to return to menu...") {
+	std::cout << prompt;
+	flushOut();
+	std::cin.clear();
+	std::string line;
+	std::getline(std::cin, line);
+}
+
 void clearScreen() {
+	flushOut();
 #ifdef _WIN32
 	system("cls");
 #else
 	system("clear");
 #endif
+	flushOut();
 }
 
 std::string getCurrentTime() {
@@ -254,10 +275,15 @@ bool checkUserPressedEnter() {
 	pfd.fd = STDIN_FILENO;
 	pfd.events = POLLIN;
 	pfd.revents = 0;
-	if (poll(&pfd, 1, 0) > 0) {
+	if (poll(&pfd, 1, 0) > 0 && (pfd.revents & POLLIN)) {
 		char c;
-		while (read(STDIN_FILENO, &c, 1) > 0 && c != '\n' && c != '\r');
-		return true;
+		bool gotAny = false;
+		while (read(STDIN_FILENO, &c, 1) > 0) {
+			gotAny = true;
+			if (c == '\n' || c == '\r') break;
+		}
+		std::cin.clear();
+		return gotAny;
 	}
 	return false;
 }
@@ -418,6 +444,7 @@ void runLocalMining(double& walletBalance, double poolPendingBalance, int& block
 		std::cout << "[SYSTEM] Initializing... (" << numThreads << " threads)...\n"
 		          << "[SYSTEM] Resuming Block #" << blockIndex << " | Difficulty: " << difficulty << "/20\n"
 		          << "[SYSTEM] Press [ENTER] at any time to abort.\n\n";
+		flushOut();
 
 		std::atomic<bool> stopMining(false);
 		std::atomic<long long> globalNonce(0);
@@ -481,7 +508,7 @@ void runLocalMining(double& walletBalance, double poolPendingBalance, int& block
 									std::string currentHashStr = formatHashToString(state1, state2);
 									std::lock_guard<std::mutex> lock(coutMutex);
 									std::cout << "nonce=" << COLOR_YELLOW << targetLog << COLOR_RESET
-									          << " hash=" << COLOR_RED << currentHashStr << COLOR_RESET << "\n";
+									          << " hash=" << COLOR_RED << currentHashStr << COLOR_RESET << "\n" << std::flush;
 								}
 							}
 						}
@@ -515,6 +542,7 @@ void runLocalMining(double& walletBalance, double poolPendingBalance, int& block
 			          << "  > time_taken    : " << std::fixed << std::setprecision(2) << durationSec << " s\n"
 			          << "  > reward_added  : +" << std::fixed << std::setprecision(8) << dynamicReward << " BTC (Exponential Tier)\n"
 			          << "----------------------------------------\n";
+			flushOut();
 
 			walletBalance += dynamicReward;
 			blockIndex++;
@@ -530,19 +558,19 @@ void runLocalMining(double& walletBalance, double poolPendingBalance, int& block
 
 			if (inspectionWait) {
 				std::cout << "[WAIT] 5s Inspection...\n\n";
+				flushOut();
 				std::this_thread::sleep_for(std::chrono::seconds(5));
 			}
 
 			if (!autoMineNext) {
-				std::cout << "Press [ENTER] to return to menu...";
-				std::cin.ignore(10000, '\n');
-				std::cin.get();
+				waitForEnter("Press [ENTER] to return to menu...");
 				miningSession = false;
 			} else {
 				std::this_thread::sleep_for(std::chrono::milliseconds(300));
 			}
 		} else {
 			std::cout << "\n[ABORT] Interrupted by user. Returning to menu...\n";
+			flushOut();
 			saveGameState(walletBalance, poolPendingBalance, blockIndex, difficulty, autoMineNext, autoDifficulty, targetHashrate, outputRate, isBanned, isSpeedModActive, isHackerModActive, inspectionWait, workerName, workerToken, authed, poolUrl);
 			std::this_thread::sleep_for(std::chrono::milliseconds(300));
 			miningSession = false;
@@ -553,13 +581,19 @@ void runLocalMining(double& walletBalance, double poolPendingBalance, int& block
 void runPoolMining(double& walletBalance, double& poolPendingBalance, int& blockIndex, int& difficulty, bool autoMineNext, bool autoDifficulty, long long targetHashrate, long long outputRate, bool isBanned, bool isSpeedModActive, bool isHackerModActive, bool inspectionWait, const std::string& workerName, const std::string& workerToken, bool& authed, std::string& poolUrl) {
 	if (!authed || workerToken.empty()) {
 		std::cout << "\n" << COLOR_RED << "Could not authorize the user, please try again.\n" << COLOR_RESET;
+		flushOut();
 		std::this_thread::sleep_for(std::chrono::seconds(2));
 		return;
 	}
 
 	if (poolUrl.empty()) {
 		std::cout << "\nEnter Pool URL (e.g., http://vicky.hidencloud.com:24698): ";
-		std::cin >> poolUrl;
+		flushOut();
+		if (!(std::cin >> poolUrl)) {
+			discardRestOfLine();
+			return;
+		}
+		discardRestOfLine();
 		if (!poolUrl.empty() && poolUrl.back() == '/') poolUrl.pop_back();
 		saveGameState(walletBalance, poolPendingBalance, blockIndex, difficulty, autoMineNext, autoDifficulty, targetHashrate, outputRate, isBanned, isSpeedModActive, isHackerModActive, inspectionWait, workerName, workerToken, authed, poolUrl);
 	}
@@ -577,6 +611,7 @@ void runPoolMining(double& walletBalance, double& poolPendingBalance, int& block
 
 		if (job.unauthorized) {
 			std::cout << COLOR_RED << job.message << "\n" << COLOR_RESET;
+			flushOut();
 			authed = false;
 			saveGameState(walletBalance, poolPendingBalance, blockIndex, difficulty, autoMineNext, autoDifficulty, targetHashrate, outputRate, isBanned, isSpeedModActive, isHackerModActive, inspectionWait, workerName, workerToken, authed, poolUrl);
 			std::this_thread::sleep_for(std::chrono::seconds(2));
@@ -585,6 +620,7 @@ void runPoolMining(double& walletBalance, double& poolPendingBalance, int& block
 
 		if (!job.valid) {
 			std::cout << COLOR_RED << "[ERROR] Cannot reach Pool Host at " << poolUrl << ". Retrying in 3s...\n" << COLOR_RESET;
+			flushOut();
 			if (checkUserPressedEnter()) break;
 			std::this_thread::sleep_for(std::chrono::seconds(3));
 			continue;
@@ -601,6 +637,7 @@ void runPoolMining(double& walletBalance, double& poolPendingBalance, int& block
 		std::cout << "[SYSTEM] Initializing... (ID: " << workerId << " | Chunk: [" << chunkMin << ".." << chunkMax << ") | Threads: " << numThreads << ")...\n"
 		          << "[SYSTEM] Mining Pool Block #" << poolBlockIndex << " | Difficulty: " << poolDifficulty << "/20 | Unclaimed: " << COLOR_YELLOW << std::fixed << std::setprecision(8) << poolPendingBalance << " BTC" << COLOR_RESET << "\n"
 		          << "[SYSTEM] Press [ENTER] at any time to abort.\n\n";
+		flushOut();
 
 		std::atomic<bool> stopMining(false);
 		std::atomic<long long> globalNonce(chunkMin);
@@ -667,7 +704,7 @@ void runPoolMining(double& walletBalance, double& poolPendingBalance, int& block
 									std::string currentHashStr = formatHashToString(state1, state2);
 									std::lock_guard<std::mutex> lock(coutMutex);
 									std::cout << "nonce=" << COLOR_YELLOW << targetLog << COLOR_RESET
-									          << " hash=" << COLOR_RED << currentHashStr << COLOR_RESET << "\n";
+									          << " hash=" << COLOR_RED << currentHashStr << COLOR_RESET << "\n" << std::flush;
 								}
 							}
 						}
@@ -712,6 +749,7 @@ void runPoolMining(double& walletBalance, double& poolPendingBalance, int& block
 
 		if (serverBlockAdvanced) {
 			std::cout << "\n" << COLOR_CYAN << "[SYNC] Detected new block/diff from pool. Requesting new chunk..." << COLOR_RESET << "\n";
+			flushOut();
 			std::this_thread::sleep_for(std::chrono::milliseconds(200));
 			continue;
 		}
@@ -742,18 +780,18 @@ void runPoolMining(double& walletBalance, double& poolPendingBalance, int& block
 			} else {
 				std::cout << "\n" << COLOR_RED << "[REJECTED] Server response: " << (submitRes.empty() ? "Connection Timeout" : submitRes) << COLOR_RESET << "\n";
 			}
+			flushOut();
 
 			saveGameState(walletBalance, poolPendingBalance, blockIndex, difficulty, autoMineNext, autoDifficulty, targetHashrate, outputRate, isBanned, isSpeedModActive, isHackerModActive, inspectionWait, workerName, workerToken, authed, poolUrl);
 
 			if (inspectionWait) {
 				std::cout << "[WAIT] 5s Inspection...\n\n";
+				flushOut();
 				std::this_thread::sleep_for(std::chrono::seconds(5));
 			}
 
 			if (!autoMineNext) {
-				std::cout << "Press [ENTER] to return to menu...";
-				std::cin.ignore(10000, '\n');
-				std::cin.get();
+				waitForEnter("Press [ENTER] to return to menu...");
 				poolSession = false;
 			} else {
 				std::this_thread::sleep_for(std::chrono::milliseconds(300));
@@ -761,10 +799,12 @@ void runPoolMining(double& walletBalance, double& poolPendingBalance, int& block
 		} else if (chunkExhausted.load(std::memory_order_relaxed)) {
 			nextRequestExhausted = true;
 			std::cout << "\n" << COLOR_CYAN << "[CHUNK] Completed [" << chunkMin << ".." << chunkMax << "). Requesting next job from pool..." << COLOR_RESET << "\n";
+			flushOut();
 			std::this_thread::sleep_for(std::chrono::milliseconds(150));
 			continue;
 		} else {
 			std::cout << "\n[ABORT] Interrupted by user. Returning to menu...\n";
+			flushOut();
 			saveGameState(walletBalance, poolPendingBalance, blockIndex, difficulty, autoMineNext, autoDifficulty, targetHashrate, outputRate, isBanned, isSpeedModActive, isHackerModActive, inspectionWait, workerName, workerToken, authed, poolUrl);
 			std::this_thread::sleep_for(std::chrono::milliseconds(300));
 			poolSession = false;
@@ -807,12 +847,13 @@ void runStandardOptions(double& walletBalance, double poolPendingBalance, int& b
 		int backChoiceId = idx;
 		std::cout << "----------------------------------------\n"
 		          << "root@miner/options# ";
+		flushOut();
 
 		if (!(std::cin >> optChoice)) {
-			std::cin.clear();
-			std::cin.ignore(10000, '\n');
+			discardRestOfLine();
 			continue;
 		}
+		discardRestOfLine();
 
 		if (optChoice == backChoiceId) break;
 
@@ -820,9 +861,14 @@ void runStandardOptions(double& walletBalance, double poolPendingBalance, int& b
 			int selectedAction = optMap[optChoice];
 			if (selectedAction == 1) {
 				std::cout << "Enter difficulty (1-20): ";
-				std::cin >> difficulty;
-				if (difficulty < 1) difficulty = 1;
-				if (difficulty > 20) difficulty = 20;
+				flushOut();
+				if (std::cin >> difficulty) {
+					discardRestOfLine();
+					if (difficulty < 1) difficulty = 1;
+					if (difficulty > 20) difficulty = 20;
+				} else {
+					discardRestOfLine();
+				}
 			} else if (selectedAction == 2) {
 				autoDifficulty = !autoDifficulty;
 			} else if (selectedAction == 3) {
@@ -831,10 +877,16 @@ void runStandardOptions(double& walletBalance, double poolPendingBalance, int& b
 				inspectionWait = !inspectionWait;
 			} else if (selectedAction == 5) {
 				std::cout << "Enter output rate (log interval): ";
-				std::cin >> outputRate;
-				if (outputRate < 1000) outputRate = 1000;
+				flushOut();
+				if (std::cin >> outputRate) {
+					discardRestOfLine();
+					if (outputRate < 1000) outputRate = 1000;
+				} else {
+					discardRestOfLine();
+				}
 			} else if (selectedAction == 6) {
 				std::cout << "[MOD] Hashrate is locked to UNLIMITED (INF)!\n";
+				flushOut();
 				std::this_thread::sleep_for(std::chrono::seconds(1));
 			}
 		}
@@ -873,50 +925,65 @@ void runPoolOptions(double& walletBalance, double& poolPendingBalance, int block
 
 		std::cout << "----------------------------------------\n"
 		          << "root@miner/pool_options# ";
+		flushOut();
 
 		if (!(std::cin >> pChoice)) {
-			std::cin.clear();
-			std::cin.ignore(10000, '\n');
+			discardRestOfLine();
 			continue;
 		}
+		discardRestOfLine();
 
 		if (pChoice == optBack) break;
 
 		if (pChoice == optSetWorker) {
 			if (poolUrl.empty()) {
 				std::cout << COLOR_RED << "[ERROR] Configure Pool URL first!\n" << COLOR_RESET;
+				flushOut();
 				std::this_thread::sleep_for(std::chrono::seconds(1));
 				continue;
 			}
 			std::cout << "\n  [1] Create\n"
 			          << "  [2] Auth\n"
 			          << "Select: ";
+			flushOut();
 			int subMode = 0;
 			if (!(std::cin >> subMode)) {
-				std::cin.clear();
-				std::cin.ignore(10000, '\n');
+				discardRestOfLine();
 				continue;
 			}
+			discardRestOfLine();
 
 			if (subMode == 1) {
 				std::string inputName, inputToken;
 				std::cout << "Set name: ";
-				std::cin >> inputName;
+				flushOut();
+				if (!(std::cin >> inputName)) {
+					discardRestOfLine();
+					continue;
+				}
+				discardRestOfLine();
 
 				std::string chkRes = execCurl("curl -s -L -A \"MinerClient\" -m 5 \"" + poolUrl + "/check_name?worker=" + inputName + "\"");
 				if (chkRes.empty()) {
 					std::cout << COLOR_RED << "[ERROR] Cannot reach Pool Host at " << poolUrl << "\n" << COLOR_RESET;
+					flushOut();
 					std::this_thread::sleep_for(std::chrono::seconds(2));
 					continue;
 				}
 				if (cleanJsonString(extractJsonValue(chkRes, "available")) != "true") {
 					std::cout << COLOR_RED << "Name is already taken by another worker.\n" << COLOR_RESET;
+					flushOut();
 					std::this_thread::sleep_for(std::chrono::seconds(2));
 					continue;
 				}
 
 				std::cout << "Set token: ";
-				std::cin >> inputToken;
+				flushOut();
+				if (!(std::cin >> inputToken)) {
+					discardRestOfLine();
+					continue;
+				}
+				discardRestOfLine();
 
 				std::string payload = "{\"worker\":\"" + inputName + "\",\"token\":\"" + inputToken + "\"}";
 				std::string regRes = execCurl("curl -s -L -A \"MinerClient\" -m 8 -X POST \"" + poolUrl + "/register_worker\" -H \"Content-Type: application/json\" -d '" + payload + "'");
@@ -931,13 +998,25 @@ void runPoolOptions(double& walletBalance, double& poolPendingBalance, int block
 				} else {
 					std::cout << COLOR_RED << "Name is already taken by another worker.\n" << COLOR_RESET;
 				}
+				flushOut();
 				std::this_thread::sleep_for(std::chrono::seconds(1));
 			} else if (subMode == 2) {
 				std::string inputName, inputToken;
 				std::cout << "Name: ";
-				std::cin >> inputName;
+				flushOut();
+				if (!(std::cin >> inputName)) {
+					discardRestOfLine();
+					continue;
+				}
+				discardRestOfLine();
+
 				std::cout << "Token: ";
-				std::cin >> inputToken;
+				flushOut();
+				if (!(std::cin >> inputToken)) {
+					discardRestOfLine();
+					continue;
+				}
+				discardRestOfLine();
 
 				std::string payload = "{\"worker\":\"" + inputName + "\",\"token\":\"" + inputToken + "\"}";
 				std::string authRes = execCurl("curl -s -L -A \"MinerClient\" -m 8 -X POST \"" + poolUrl + "/auth_worker\" -H \"Content-Type: application/json\" -d '" + payload + "'");
@@ -952,15 +1031,22 @@ void runPoolOptions(double& walletBalance, double& poolPendingBalance, int block
 				} else {
 					std::cout << COLOR_RED << "[ERROR] Auth failed: invalid name or token.\n" << COLOR_RESET;
 				}
+				flushOut();
 				std::this_thread::sleep_for(std::chrono::seconds(2));
 			}
 		} else if (pChoice == optSetUrl) {
 			std::cout << "Enter Pool URL: ";
-			std::cin >> poolUrl;
-			if (!poolUrl.empty() && poolUrl.back() == '/') poolUrl.pop_back();
+			flushOut();
+			if (std::cin >> poolUrl) {
+				discardRestOfLine();
+				if (!poolUrl.empty() && poolUrl.back() == '/') poolUrl.pop_back();
+			} else {
+				discardRestOfLine();
+			}
 		} else if (pChoice == optClaim) {
 			if (poolUrl.empty()) {
 				std::cout << COLOR_RED << "[ERROR] Configure Pool URL first!\n" << COLOR_RESET;
+				flushOut();
 				std::this_thread::sleep_for(std::chrono::seconds(1));
 			} else {
 				std::string payload = "{\"worker\":\"" + workerName + "\",\"token\":\"" + workerToken + "\"}";
@@ -977,6 +1063,7 @@ void runPoolOptions(double& walletBalance, double& poolPendingBalance, int block
 				} else {
 					std::cout << COLOR_YELLOW << "[INFO] No pool balance available to claim.\n" << COLOR_RESET;
 				}
+				flushOut();
 				std::this_thread::sleep_for(std::chrono::seconds(2));
 			}
 		}
@@ -1018,10 +1105,8 @@ int main() {
 		clearScreen();
 		std::cout << COLOR_RED << "access denied\n"
 		          << "Your config file has been found as compromised/modified illegally, programme locked permanently and your data has been wiped. To continue, delete the existing configs file.\n"
-		          << COLOR_RESET;
-		std::cout << "\nPress ENTER to exit program...";
-		std::cin.ignore(10000, '\n');
-		std::cin.get();
+		          << COLOR_RESET << "\n";
+		waitForEnter("Press ENTER to exit program...");
 		return 0;
 	}
 
@@ -1046,15 +1131,17 @@ int main() {
 			          << (isHackerModActive ? COLOR_CYAN "[MOD LOADER] Active: hacker.mod detected (Admin Unlocked)!\n" : "")
 			          << COLOR_RESET
 			          << "root@miner:~# ";
+			flushOut();
 
 			if (!(std::cin >> choice)) {
-				std::cin.clear();
-				std::cin.ignore(10000, '\n');
+				discardRestOfLine();
 				continue;
 			}
+			discardRestOfLine();
 
 			if (choice == 3) {
 				std::cout << "Terminating process...\n";
+				flushOut();
 				saveGameState(walletBalance, poolPendingBalance, blockIndex, difficulty, autoMineNext, autoDifficulty, targetHashrate, outputRate, isBanned, isSpeedModActive, isHackerModActive, inspectionWait, workerName, workerToken, authed, poolUrl);
 				break;
 			} else if (choice == 2) {
@@ -1078,19 +1165,21 @@ int main() {
 			          << "cpu_threads   : " << hardwareCores << " cores\n"
 			          << "current_block : #" << blockIndex << "\n"
 			          << (isSpeedModActive ? COLOR_CYAN "[MOD LOADER] Active: unlimited_speed.mod detected!\n" : "")
-			          << (isHackerModActive ? COLOR_CYAN "[MOD LOADER] Active: hacker.mod detected!\n" : "")
+			          << (isHackerModActive ? COLOR_CYAN "[MOD LOADER] Active: hacker.mod detected (Admin Unlocked)!\n" : "")
 			          << COLOR_YELLOW "[MOD LOADER] Active: pool_mining.mod detected!\n"
 			          << COLOR_RESET
 			          << "root@miner:~# ";
+			flushOut();
 
 			if (!(std::cin >> choice)) {
-				std::cin.clear();
-				std::cin.ignore(10000, '\n');
+				discardRestOfLine();
 				continue;
 			}
+			discardRestOfLine();
 
 			if (choice == 5) {
 				std::cout << "Terminating process...\n";
+				flushOut();
 				saveGameState(walletBalance, poolPendingBalance, blockIndex, difficulty, autoMineNext, autoDifficulty, targetHashrate, outputRate, isBanned, isSpeedModActive, isHackerModActive, inspectionWait, workerName, workerToken, authed, poolUrl);
 				break;
 			} else if (choice == 4) {
@@ -1107,3 +1196,6 @@ int main() {
 	}
 	return 0;
 }
+```[cite: 1]
+
+Bạn biên dịch lại bằng `g++ -std=c++17 -pthread client.cpp -o miner` rồi chạy thử xem còn hiện tượng lệch `stdin`/`stdout` hay kẹt buffer nào nữa không nhé!
