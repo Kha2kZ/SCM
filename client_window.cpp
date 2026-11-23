@@ -30,7 +30,6 @@
 const std::string SPEED_TOKEN = "tk_756e6e696d697465647370656564";
 const std::string HACKER_TOKEN = "KHAI_HACKER_ADMIN_2026";
 const std::string POOL_TOKEN = "tk_706f6f6c6d696e696e67";
-
 const long long DEFAULT_CHUNK_STEP = 10000000000LL;
 
 struct AppPaths {
@@ -55,173 +54,154 @@ struct PoolJob {
     double unclaimedPool = 0.0;
 };
 
-inline void flushOut() {
-    std::cout.flush();
-    std::fflush(stdout);
-}
-
-inline void discardRestOfLine() {
+inline void discardLine() {
     std::cin.clear();
     std::cin.ignore((std::numeric_limits<std::streamsize>::max)(), '\n');
 }
 
-inline void waitForEnter(const std::string& prompt = "Press [ENTER] to return to menu...") {
-    std::cout << prompt;
-    flushOut();
+inline void waitEnter(const std::string& msg = "Press [ENTER] to return to menu...") {
+    std::cout << msg << std::flush;
     std::cin.clear();
-    std::string line;
-    std::getline(std::cin, line);
+    std::string s;
+    std::getline(std::cin, s);
 }
 
-std::string getEnvVarWindows(const char* name) {
+std::string getEnvWindows(const char* name) {
     DWORD needed = GetEnvironmentVariableA(name, nullptr, 0);
     if (needed == 0) return "";
     std::string buf(needed, '\0');
-    DWORD written = GetEnvironmentVariableA(name, &buf[0], needed);
-    if (written == 0) return "";
-    if (!buf.empty() && buf.back() == '\0') {
-        buf.pop_back();
-    }
+    if (GetEnvironmentVariableA(name, &buf[0], needed) == 0) return "";
+    if (!buf.empty() && buf.back() == '\0') buf.pop_back();
     return buf;
 }
 
 AppPaths getAppPaths() {
-    std::string profileDir = getEnvVarWindows("USERPROFILE");
+    std::string profileDir = getEnvWindows("USERPROFILE");
     if (profileDir.empty()) {
-        std::string drive = getEnvVarWindows("HOMEDRIVE");
-        std::string path = getEnvVarWindows("HOMEPATH");
-        profileDir = drive + path;
+        profileDir = getEnvWindows("HOMEDRIVE") + getEnvWindows("HOMEPATH");
     }
-
-    AppPaths paths;
-    paths.baseDir = profileDir + "\\Desktop\\crypto_miner";
-    paths.modsDir = paths.baseDir + "\\mods";
-    paths.saveFile = paths.baseDir + "\\financial_report.json";
-    paths.speedMod = paths.modsDir + "\\unlimited_speed.mod";
-    paths.hackerMod = paths.modsDir + "\\hacker.mod";
-    paths.poolMod = paths.modsDir + "\\pool_mining.mod";
-    return paths;
+    AppPaths p;
+    p.baseDir = profileDir + "\\Desktop\\crypto_miner";
+    p.modsDir = p.baseDir + "\\mods";
+    p.saveFile = p.baseDir + "\\financial_report.json";
+    p.speedMod = p.modsDir + "\\unlimited_speed.mod";
+    p.hackerMod = p.modsDir + "\\hacker.mod";
+    p.poolMod = p.modsDir + "\\pool_mining.mod";
+    return p;
 }
 
-bool verifyExeInsideBaseDir(const std::string& baseDir) {
-    char exePathBuf[MAX_PATH];
-    DWORD n = GetModuleFileNameA(nullptr, exePathBuf, MAX_PATH);
-    if (n == 0 || n >= MAX_PATH) return false;
-
+bool verifyExeInBaseDir(const std::string& baseDir) {
+    char exeBuf[MAX_PATH];
+    DWORD len = GetModuleFileNameA(nullptr, exeBuf, MAX_PATH);
+    if (len == 0 || len >= MAX_PATH) return false;
     try {
-        std::filesystem::path exePath = std::filesystem::weakly_canonical(std::filesystem::path(exePathBuf));
-        std::filesystem::path expectedDir = std::filesystem::weakly_canonical(std::filesystem::path(baseDir));
-        return (exePath.parent_path() == expectedDir);
+        auto exePath = std::filesystem::weakly_canonical(std::filesystem::path(exeBuf));
+        auto dirPath = std::filesystem::weakly_canonical(std::filesystem::path(baseDir));
+        return exePath.parent_path() == dirPath;
     } catch (...) {
         return false;
     }
 }
 
-void enableAnsiColors() {
+void enableAnsi() {
     HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
-    if (hOut != INVALID_HANDLE_VALUE) {
-        DWORD dwMode = 0;
-        if (GetConsoleMode(hOut, &dwMode)) {
-            dwMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
-            SetConsoleMode(hOut, dwMode);
-        }
+    DWORD mode = 0;
+    if (hOut != INVALID_HANDLE_VALUE && GetConsoleMode(hOut, &mode)) {
+        SetConsoleMode(hOut, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
     }
 }
 
 void clearScreen() {
-    flushOut();
+    std::cout << std::flush;
     system("cls");
-    flushOut();
 }
 
 std::string getCurrentTime() {
     auto now = std::chrono::system_clock::now();
-    std::time_t now_c = std::chrono::system_clock::to_time_t(now);
-    std::tm local_time{};
-    localtime_s(&local_time, &now_c);
+    std::time_t t = std::chrono::system_clock::to_time_t(now);
+    std::tm tmBuf{};
+    localtime_s(&tmBuf, &t);
     std::ostringstream oss;
-    oss << std::put_time(&local_time, "%H:%M:%S");
+    oss << std::put_time(&tmBuf, "%H:%M:%S");
     return oss.str();
 }
 
-inline std::string cleanJsonString(std::string val) {
-    val.erase(std::remove(val.begin(), val.end(), '\"'), val.end());
-    val.erase(std::remove(val.begin(), val.end(), '\''), val.end());
-    size_t first = val.find_first_not_of(" \t\n\r");
-    if (first == std::string::npos) return "";
-    size_t last = val.find_last_not_of(" \t\n\r");
-    return val.substr(first, (last - first + 1));
+inline std::string trimClean(std::string s) {
+    s.erase(std::remove(s.begin(), s.end(), '\"'), s.end());
+    s.erase(std::remove(s.begin(), s.end(), '\''), s.end());
+    size_t a = s.find_first_not_of(" \t\r\n");
+    if (a == std::string::npos) return "";
+    size_t b = s.find_last_not_of(" \t\r\n");
+    return s.substr(a, b - a + 1);
 }
 
-inline int safeStoi(const std::string& str, int defaultValue = 0) {
-    std::string cleaned = cleanJsonString(str);
-    if (cleaned.empty()) return defaultValue;
-    try {
-        return std::stoi(cleaned);
-    } catch (...) {
-        return defaultValue;
-    }
+inline int toInt(const std::string& s, int defVal = 0) {
+    std::string c = trimClean(s);
+    if (c.empty()) return defVal;
+    try { return std::stoi(c); } catch (...) { return defVal; }
 }
 
-inline long long safeStoll(const std::string& str, long long defaultValue = 0) {
-    std::string cleaned = cleanJsonString(str);
-    if (cleaned.empty()) return defaultValue;
-    try {
-        return std::stoll(cleaned);
-    } catch (...) {
-        return defaultValue;
-    }
+inline long long toLL(const std::string& s, long long defVal = 0) {
+    std::string c = trimClean(s);
+    if (c.empty()) return defVal;
+    try { return std::stoll(c); } catch (...) { return defVal; }
 }
 
-inline unsigned long long safeStoull(const std::string& str, unsigned long long defaultValue = 0) {
-    std::string cleaned = cleanJsonString(str);
-    if (cleaned.empty()) return defaultValue;
-    try {
-        return std::stoull(cleaned);
-    } catch (...) {
-        return defaultValue;
-    }
+inline unsigned long long toULL(const std::string& s, unsigned long long defVal = 0) {
+    std::string c = trimClean(s);
+    if (c.empty()) return defVal;
+    try { return std::stoull(c); } catch (...) { return defVal; }
 }
 
-inline double safeStod(const std::string& str, double defaultValue = 0.0) {
-    std::string cleaned = cleanJsonString(str);
-    if (cleaned.empty()) return defaultValue;
-    try {
-        return std::stod(cleaned);
-    } catch (...) {
-        return defaultValue;
-    }
+inline double toDouble(const std::string& s, double defVal = 0.0) {
+    std::string c = trimClean(s);
+    if (c.empty()) return defVal;
+    try { return std::stod(c); } catch (...) { return defVal; }
 }
 
-std::string execCurl(const std::string& cmd) {
-    std::string result;
+std::string runCmd(const std::string& cmd) {
+    std::string out;
     FILE* pipe = _popen(cmd.c_str(), "r");
     if (!pipe) return "";
-    char buffer[512];
-    while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
-        result += buffer;
+    char buf[512];
+    while (fgets(buf, sizeof(buf), pipe) != nullptr) {
+        out += buf;
     }
     _pclose(pipe);
-    return result;
+    return out;
 }
 
-std::string execCurlJsonPost(const std::string& baseDir, const std::string& url, const std::string& jsonPayload, int timeoutSec = 8) {
-    std::string tempPath = baseDir + "\\.post_payload.json";
-    {
-        std::ofstream out(tempPath, std::ios::out | std::ios::binary | std::ios::trunc);
-        if (!out.is_open()) return "";
-        out.write(jsonPayload.data(), static_cast<std::streamsize>(jsonPayload.size()));
-        out.close();
+std::string httpGet(const std::string& url, int timeoutSec = 6) {
+    return runCmd("curl.exe -s -L -m " + std::to_string(timeoutSec) + " \"" + url + "\"");
+}
+
+std::string httpPostJson(const std::string& url, const std::string& worker, const std::string& token, int timeoutSec = 8) {
+    std::string body = "{\"worker\":\"" + worker + "\",\"token\":\"" + token + "\"}";
+    std::string escapedBody;
+    escapedBody.reserve(body.size() * 2);
+    for (char c : body) {
+        if (c == '"') escapedBody += "\\\"";
+        else escapedBody += c;
     }
+    return runCmd("curl.exe -s -L -m " + std::to_string(timeoutSec)
+                  + " -X POST -H \"Content-Type: application/json\" -d \""
+                  + escapedBody + "\" \"" + url + "\"");
+}
 
-    std::string cmd = "curl -s -L -A \"MinerClient\" -m " + std::to_string(timeoutSec)
-                    + " -X POST \"" + url + "\" -H \"Content-Type: application/json\" --data-binary @"
-                    + "\"" + tempPath + "\"";
-    std::string resp = execCurl(cmd);
-
-    std::error_code ec;
-    std::filesystem::remove(tempPath, ec);
-    return resp;
+std::string httpPostSubmit(const std::string& url, const std::string& worker, const std::string& token, int blockIdx, long long nonce, double durationSec, int timeoutSec = 8) {
+    std::string body = "{\"worker\":\"" + worker + "\",\"token\":\"" + token
+                     + "\",\"block_index\":" + std::to_string(blockIdx)
+                     + ",\"winning_nonce\":" + std::to_string(nonce)
+                     + ",\"duration_sec\":" + std::to_string(durationSec) + "}";
+    std::string escapedBody;
+    escapedBody.reserve(body.size() * 2);
+    for (char c : body) {
+        if (c == '"') escapedBody += "\\\"";
+        else escapedBody += c;
+    }
+    return runCmd("curl.exe -s -L -m " + std::to_string(timeoutSec)
+                  + " -X POST -H \"Content-Type: application/json\" -d \""
+                  + escapedBody + "\" \"" + url + "\"");
 }
 
 std::string extractJsonValue(const std::string& json, const std::string& key) {
@@ -239,15 +219,10 @@ std::string extractJsonValue(const std::string& json, const std::string& key) {
             endPos++;
         }
         return json.substr(pos, endPos - pos);
-    } else {
-        size_t endPos = json.find_first_of(",}\r\n", pos);
-        if (endPos == std::string::npos) endPos = json.length();
-        std::string val = json.substr(pos, endPos - pos);
-        size_t first = val.find_first_not_of(" \t\r\n");
-        if (first == std::string::npos) return "";
-        size_t last = val.find_last_not_of(" \t\r\n");
-        return val.substr(first, (last - first + 1));
     }
+    size_t endPos = json.find_first_of(",}\r\n", pos);
+    if (endPos == std::string::npos) endPos = json.length();
+    return trimClean(json.substr(pos, endPos - pos));
 }
 
 inline uint32_t computeASICStep32(uint32_t state, uint32_t nonceChunk) {
@@ -261,77 +236,52 @@ inline uint32_t computeASICStep32(uint32_t state, uint32_t nonceChunk) {
     return state;
 }
 
-inline int countLeadingZeros32(uint32_t x) {
-#if defined(_MSC_VER)
-    unsigned long idx = 0;
-    if (_BitScanReverse(&idx, x)) {
-        return static_cast<int>(31 - idx);
-    }
-    return 32;
-#else
+inline int clz32(uint32_t x) {
     if (x == 0) return 32;
-    return __builtin_clz(x);
-#endif
+    unsigned long idx = 0;
+    _BitScanReverse(&idx, x);
+    return static_cast<int>(31 - idx);
 }
 
-inline bool checkDifficultyMatch(uint32_t part1, uint32_t part2, uint32_t part3, uint32_t part4, int diff) {
+inline bool checkDifficultyMatch(uint32_t p1, uint32_t p2, uint32_t p3, uint32_t p4, int diff) {
     if (diff <= 8) {
-        if (diff == 8) return part1 == 0;
-        if (part1 == 0) return true;
-        int clz = countLeadingZeros32(part1);
-        return (clz >= diff * 4);
+        if (diff == 8) return p1 == 0;
+        return p1 == 0 ? true : (clz32(p1) >= diff * 4);
     } else if (diff <= 16) {
-        if (part1 != 0) return false;
+        if (p1 != 0) return false;
         int rem = diff - 8;
-        if (rem == 8) return part2 == 0;
-        if (part2 == 0) return true;
-        int clz = countLeadingZeros32(part2);
-        return (clz >= rem * 4);
+        if (rem == 8) return p2 == 0;
+        return p2 == 0 ? true : (clz32(p2) >= rem * 4);
     } else if (diff <= 24) {
-        if (part1 != 0 || part2 != 0) return false;
+        if (p1 != 0 || p2 != 0) return false;
         int rem = diff - 16;
-        if (rem == 8) return part3 == 0;
-        if (part3 == 0) return true;
-        int clz = countLeadingZeros32(part3);
-        return (clz >= rem * 4);
+        if (rem == 8) return p3 == 0;
+        return p3 == 0 ? true : (clz32(p3) >= rem * 4);
     } else {
-        if (part1 != 0 || part2 != 0 || part3 != 0) return false;
+        if (p1 != 0 || p2 != 0 || p3 != 0) return false;
         int rem = diff - 24;
-        if (rem == 8) return part4 == 0;
-        if (part4 == 0) return true;
-        int clz = countLeadingZeros32(part4);
-        return (clz >= rem * 4);
+        if (rem == 8) return p4 == 0;
+        return p4 == 0 ? true : (clz32(p4) >= rem * 4);
     }
 }
 
-std::string formatHashToString(uint32_t state1, uint32_t state2) {
-    const char* hex_chars = "0123456789abcdef";
-    char hexOut[33];
-
-    uint32_t part1 = state1 ^ (state2 >> 3);
-    uint32_t part2 = state2 ^ (state1 << 3);
-    uint32_t part3 = state1 * 3;
-    uint32_t part4 = state2 * 5;
-
-    auto formatHexChunk = [](uint32_t val, char* dest, const char* map) {
+std::string formatHashToString(uint32_t s1, uint32_t s2) {
+    const char* hex = "0123456789abcdef";
+    char out[33];
+    uint32_t parts[4] = { s1 ^ (s2 >> 3), s2 ^ (s1 << 3), s1 * 3, s2 * 5 };
+    for (int k = 0; k < 4; ++k) {
+        uint32_t v = parts[k];
         for (int i = 7; i >= 0; --i) {
-            dest[i] = map[val & 0x0F];
-            val >>= 4;
+            out[k * 8 + i] = hex[v & 0x0F];
+            v >>= 4;
         }
-    };
-
-    formatHexChunk(part1, &hexOut[0], hex_chars);
-    formatHexChunk(part2, &hexOut[8], hex_chars);
-    formatHexChunk(part3, &hexOut[16], hex_chars);
-    formatHexChunk(part4, &hexOut[24], hex_chars);
-    hexOut[32] = '\0';
-
-    return std::string(hexOut);
+    }
+    out[32] = '\0';
+    return std::string(out);
 }
 
 std::string simulateHash(const std::string& input) {
-    uint32_t s1 = 2166136261UL;
-    uint32_t s2 = 3382945747UL;
+    uint32_t s1 = 2166136261UL, s2 = 3382945747UL;
     for (char c : input) {
         uint32_t val = static_cast<uint32_t>(c);
         s1 = computeASICStep32(s1, val);
@@ -343,944 +293,615 @@ std::string simulateHash(const std::string& input) {
 }
 
 bool verifyMod(const std::string& path, const std::string& expectedToken) {
-    std::ifstream modFile(path);
-    if (!modFile.is_open()) return false;
-    std::string token;
-    std::getline(modFile, token);
-    modFile.close();
-    size_t first = token.find_first_not_of(" \t\r\n");
-    if (first == std::string::npos) return false;
-    size_t last = token.find_last_not_of(" \t\r\n");
-    token = token.substr(first, (last - first + 1));
-    return (token == expectedToken);
+    std::ifstream f(path);
+    if (!f.is_open()) return false;
+    std::string line;
+    std::getline(f, line);
+    return trimClean(line) == expectedToken;
 }
 
-bool checkUserPressedEnter() {
+bool pressedEnter() {
     while (_kbhit()) {
         int ch = _getch();
-        if (ch == '\r' || ch == '\n') {
-            return true;
-        }
+        if (ch == '\r' || ch == '\n') return true;
     }
     return false;
 }
 
-unsigned long long calculateChecksum(double balance, double poolPendingBalance, int blockIdx, int diff, bool isBanned, long long targetHashrate, bool speedActive, bool hackerActive, bool inspectionWait, bool authed) {
-    unsigned long long secretKey = 0x53414C54ULL;
-    long long satoshis = static_cast<long long>(balance * 100000000.0 + 0.5);
-    long long poolSats = static_cast<long long>(poolPendingBalance * 100000000.0 + 0.5);
-    return (satoshis ^ (poolSats * 13) ^ (blockIdx * 31) ^ (diff * 17) ^ (targetHashrate * 7)
-            ^ (speedActive ? 0x12345678ULL : 0)
-            ^ (hackerActive ? 0xABCDEF01ULL : 0)
-            ^ (inspectionWait ? 0x99999999ULL : 0)
+unsigned long long calcChecksum(double balance, double poolPending, int blockIdx, int diff, bool banned, long long hashrate, bool speedMod, bool hackerMod, bool inspectWait, bool authed) {
+    unsigned long long salt = 0x53414C54ULL;
+    long long balSats = static_cast<long long>(balance * 100000000.0 + 0.5);
+    long long poolSats = static_cast<long long>(poolPending * 100000000.0 + 0.5);
+    return (balSats ^ (poolSats * 13) ^ (blockIdx * 31) ^ (diff * 17) ^ (hashrate * 7)
+            ^ (speedMod ? 0x12345678ULL : 0)
+            ^ (hackerMod ? 0xABCDEF01ULL : 0)
+            ^ (inspectWait ? 0x99999999ULL : 0)
             ^ (authed ? 0x2468ACE0ULL : 0)
-            ^ (isBanned ? 0xFFFFFFFFFFFFFFFFULL : 0)) + secretKey;
+            ^ (banned ? 0xFFFFFFFFFFFFFFFFULL : 0)) + salt;
 }
 
-void saveGameState(const std::string& saveFilePath, double balance, double poolPendingBalance, int blockIdx, int diff, bool autoMine, bool autoDiff, long long targetHashrate, long long outputRate, bool isBanned, bool speedActive, bool hackerActive, bool inspectionWait, const std::string& workerName, const std::string& workerToken, bool authed, std::string poolUrl) {
+void saveState(const std::string& filePath, double balance, double poolPending, int blockIdx, int diff, bool autoMine, bool autoDiff, long long hashrate, long long outRate, bool banned, bool speedMod, bool hackerMod, bool inspectWait, const std::string& workerName, const std::string& workerToken, bool authed, std::string poolUrl) {
     if (!poolUrl.empty() && poolUrl.back() == '/') poolUrl.pop_back();
-    unsigned long long checksum = calculateChecksum(balance, poolPendingBalance, blockIdx, diff, isBanned, targetHashrate, speedActive, hackerActive, inspectionWait, authed);
-    std::ostringstream buffer;
-    buffer << "{\n"
-           << "  \"document_title\": \"Q3 Financial Summary & Asset Audit Report\",\n"
-           << "  \"classification\": \"CONFIDENTIAL_INTERNAL\",\n"
-           << "  \"worker_name\": \"" << workerName << "\",\n"
-           << "  \"worker_token\": \"" << workerToken << "\",\n"
-           << "  \"authed\": " << (authed ? "true" : "false") << ",\n"
-           << "  \"pool_url\": \"" << poolUrl << "\",\n"
-           << "  \"wallet_balance\": " << std::fixed << std::setprecision(8) << balance << ",\n"
-           << "  \"pool_unclaimed\": " << std::fixed << std::setprecision(8) << poolPendingBalance << ",\n"
-           << "  \"block_index\": " << blockIdx << ",\n"
-           << "  \"difficulty\": " << diff << ",\n"
-           << "  \"target_hashrate\": " << targetHashrate << ",\n"
-           << "  \"output_rate\": " << outputRate << ",\n"
-           << "  \"auto_mine_next\": " << (autoMine ? "true" : "false") << ",\n"
-           << "  \"inspection_wait\": " << (inspectionWait ? "true" : "false") << ",\n"
-           << "  \"auto_difficulty\": " << (autoDiff ? "true" : "false") << ",\n"
-           << "  \"is_banned\": " << (isBanned ? "true" : "false") << ",\n"
-           << "  \"security_checksum\": " << checksum << "\n"
-           << "}\n";
-
-    std::ofstream outFile(saveFilePath, std::ios::out | std::ios::trunc);
-    if (outFile.is_open()) {
-        outFile << buffer.str();
-        outFile.flush();
-        outFile.close();
-    }
+    unsigned long long csum = calcChecksum(balance, poolPending, blockIdx, diff, banned, hashrate, speedMod, hackerMod, inspectWait, authed);
+    std::ofstream out(filePath, std::ios::out | std::ios::trunc);
+    if (!out.is_open()) return;
+    out << "{\n"
+        << "  \"worker_name\": \"" << workerName << "\",\n"
+        << "  \"worker_token\": \"" << workerToken << "\",\n"
+        << "  \"authed\": " << (authed ? "true" : "false") << ",\n"
+        << "  \"pool_url\": \"" << poolUrl << "\",\n"
+        << "  \"wallet_balance\": " << std::fixed << std::setprecision(8) << balance << ",\n"
+        << "  \"pool_unclaimed\": " << std::fixed << std::setprecision(8) << poolPending << ",\n"
+        << "  \"block_index\": " << blockIdx << ",\n"
+        << "  \"difficulty\": " << diff << ",\n"
+        << "  \"target_hashrate\": " << hashrate << ",\n"
+        << "  \"output_rate\": " << outRate << ",\n"
+        << "  \"auto_mine_next\": " << (autoMine ? "true" : "false") << ",\n"
+        << "  \"inspection_wait\": " << (inspectWait ? "true" : "false") << ",\n"
+        << "  \"auto_difficulty\": " << (autoDiff ? "true" : "false") << ",\n"
+        << "  \"is_banned\": " << (banned ? "true" : "false") << ",\n"
+        << "  \"security_checksum\": " << csum << "\n"
+        << "}\n";
 }
 
-void loadGameState(const std::string& saveFilePath, double& balance, double& poolPendingBalance, int& blockIdx, int& diff, bool& autoMine, bool& autoDiff, long long& targetHashrate, long long& outputRate, bool& isBanned, bool speedActive, bool hackerActive, bool& inspectionWait, std::string& workerName, std::string& workerToken, bool& authed, std::string& poolUrl) {
-    std::ifstream inFile(saveFilePath);
-    if (!inFile.is_open()) {
-        saveGameState(saveFilePath, balance, poolPendingBalance, blockIdx, diff, autoMine, autoDiff, targetHashrate, outputRate, isBanned, speedActive, hackerActive, inspectionWait, workerName, workerToken, authed, poolUrl);
+void loadState(const std::string& filePath, double& balance, double& poolPending, int& blockIdx, int& diff, bool& autoMine, bool& autoDiff, long long& hashrate, long long& outRate, bool& banned, bool speedMod, bool hackerMod, bool& inspectWait, std::string& workerName, std::string& workerToken, bool& authed, std::string& poolUrl) {
+    std::ifstream in(filePath);
+    if (!in.is_open()) {
+        saveState(filePath, balance, poolPending, blockIdx, diff, autoMine, autoDiff, hashrate, outRate, banned, speedMod, hackerMod, inspectWait, workerName, workerToken, authed, poolUrl);
         return;
     }
     std::string line;
-    unsigned long long loadedChecksum = 0;
-    bool checksumFound = false;
+    unsigned long long loadedCsum = 0;
+    bool hasCsum = false;
 
-    while (std::getline(inFile, line)) {
-        try {
-            auto parse = [&](const std::string& key) -> std::string {
-                std::string exactKey = "\"" + key + "\"";
-                size_t p = line.find(exactKey);
-                if (p != std::string::npos) {
-                    size_t c = line.find(':', p);
-                    if (c != std::string::npos) {
-                        std::string v = line.substr(c + 1);
-                        size_t first = v.find_first_not_of(" \t\r\n\"");
-                        if (first == std::string::npos) return "";
-                        size_t last = v.find_last_not_of(" \t\r\n\",");
-                        return v.substr(first, (last - first + 1));
-                    }
-                }
-                return "";
-            };
+    auto getVal = [&](const std::string& key) -> std::string {
+        std::string k = "\"" + key + "\"";
+        size_t p = line.find(k);
+        if (p == std::string::npos) return "";
+        size_t c = line.find(':', p);
+        if (c == std::string::npos) return "";
+        std::string raw = line.substr(c + 1);
+        size_t a = raw.find_first_not_of(" \t\r\n\"");
+        if (a == std::string::npos) return "";
+        size_t b = raw.find_last_not_of(" \t\r\n\",");
+        return raw.substr(a, b - a + 1);
+    };
 
-            std::string v;
-            if ((v = parse("wallet_balance")) != "") balance = safeStod(v, balance);
-            else if ((v = parse("worker_name")) != "") workerName = v;
-            else if ((v = parse("worker_token")) != "") workerToken = v;
-            else if ((v = parse("authed")) != "") authed = (v == "true");
-            else if ((v = parse("pool_url")) != "") poolUrl = v;
-            else if ((v = parse("pool_unclaimed")) != "") poolPendingBalance = safeStod(v, poolPendingBalance);
-            else if ((v = parse("block_index")) != "") blockIdx = safeStoi(v, blockIdx);
-            else if ((v = parse("difficulty")) != "") diff = safeStoi(v, diff);
-            else if ((v = parse("target_hashrate")) != "") targetHashrate = safeStoll(v, targetHashrate);
-            else if ((v = parse("output_rate")) != "") outputRate = safeStoll(v, outputRate);
-            else if ((v = parse("auto_mine_next")) != "") autoMine = (v == "true");
-            else if ((v = parse("inspection_wait")) != "") inspectionWait = (v == "true");
-            else if ((v = parse("auto_difficulty")) != "") autoDiff = (v == "true");
-            else if ((v = parse("is_banned")) != "") isBanned = (v == "true");
-            else if ((v = parse("security_checksum")) != "") {
-                loadedChecksum = safeStoull(v, 0);
-                checksumFound = true;
-            }
-        } catch (...) {}
-    }
-    inFile.close();
-
-    if (checksumFound) {
-        unsigned long long expectedChecksum = calculateChecksum(balance, poolPendingBalance, blockIdx, diff, isBanned, targetHashrate, speedActive, hackerActive, inspectionWait, authed);
-        if (loadedChecksum != expectedChecksum) {
-            isBanned = true;
-            saveGameState(saveFilePath, balance, poolPendingBalance, blockIdx, diff, autoMine, autoDiff, targetHashrate, outputRate, isBanned, speedActive, hackerActive, inspectionWait, workerName, workerToken, authed, poolUrl);
+    while (std::getline(in, line)) {
+        std::string v;
+        if ((v = getVal("wallet_balance")) != "") balance = toDouble(v, balance);
+        else if ((v = getVal("worker_name")) != "") workerName = v;
+        else if ((v = getVal("worker_token")) != "") workerToken = v;
+        else if ((v = getVal("authed")) != "") authed = (v == "true");
+        else if ((v = getVal("pool_url")) != "") poolUrl = v;
+        else if ((v = getVal("pool_unclaimed")) != "") poolPending = toDouble(v, poolPending);
+        else if ((v = getVal("block_index")) != "") blockIdx = toInt(v, blockIdx);
+        else if ((v = getVal("difficulty")) != "") diff = toInt(v, diff);
+        else if ((v = getVal("target_hashrate")) != "") hashrate = toLL(v, hashrate);
+        else if ((v = getVal("output_rate")) != "") outRate = toLL(v, outRate);
+        else if ((v = getVal("auto_mine_next")) != "") autoMine = (v == "true");
+        else if ((v = getVal("inspection_wait")) != "") inspectWait = (v == "true");
+        else if ((v = getVal("auto_difficulty")) != "") autoDiff = (v == "true");
+        else if ((v = getVal("is_banned")) != "") banned = (v == "true");
+        else if ((v = getVal("security_checksum")) != "") {
+            loadedCsum = toULL(v, 0);
+            hasCsum = true;
         }
+    }
+
+    if (hasCsum && loadedCsum != calcChecksum(balance, poolPending, blockIdx, diff, banned, hashrate, speedMod, hackerMod, inspectWait, authed)) {
+        banned = true;
+        saveState(filePath, balance, poolPending, blockIdx, diff, autoMine, autoDiff, hashrate, outRate, banned, speedMod, hackerMod, inspectWait, workerName, workerToken, authed, poolUrl);
     }
 }
 
-PoolJob requestPoolJob(const std::string& poolUrl, const std::string& workerName, const std::string& workerToken, int fallbackBlock, int fallbackDiff, double fallbackUnclaimed, bool exhausted = false) {
+PoolJob requestPoolJob(const std::string& poolUrl, const std::string& worker, const std::string& token, int fbBlock, int fbDiff, double fbPool, bool exhausted) {
     PoolJob job;
-    std::string jobUri = poolUrl + "/request_job?worker=" + workerName + "&token=" + workerToken + "&exhausted=" + (exhausted ? "1" : "0");
-    std::string resJson = execCurl("curl -s -L -A \"MinerClient\" -m 8 \"" + jobUri + "\"");
+    std::string url = poolUrl + "/request_job?worker=" + worker + "&token=" + token + "&exhausted=" + (exhausted ? "1" : "0");
+    std::string res = httpGet(url, 8);
+    if (res.empty()) return job;
 
-    if (resJson.empty()) {
-        return job;
-    }
-
-    std::string status = cleanJsonString(extractJsonValue(resJson, "status"));
+    std::string status = trimClean(extractJsonValue(res, "status"));
     if (status == "unauthorized") {
         job.unauthorized = true;
-        job.message = cleanJsonString(extractJsonValue(resJson, "message"));
+        job.message = trimClean(extractJsonValue(res, "message"));
         if (job.message.empty()) job.message = "Could not authorize the user, please try again.";
         return job;
     }
 
-    if (resJson.find("chunk_min") == std::string::npos && resJson.find("worker_id") == std::string::npos) {
+    if (res.find("chunk_min") == std::string::npos && res.find("worker_id") == std::string::npos) {
         return job;
     }
 
     job.valid = true;
-    job.workerId = safeStoll(extractJsonValue(resJson, "worker_id"), 0);
-    job.chunkMin = safeStoll(extractJsonValue(resJson, "chunk_min"), 0);
-    long long stepVal = safeStoll(extractJsonValue(resJson, "chunk_size"), DEFAULT_CHUNK_STEP);
-    if (stepVal <= 0) stepVal = DEFAULT_CHUNK_STEP;
-    job.chunkMax = safeStoll(extractJsonValue(resJson, "chunk_max"), job.chunkMin + stepVal);
-    if (job.chunkMax <= job.chunkMin) {
-        job.chunkMax = job.chunkMin + stepVal;
-    }
+    job.workerId = toLL(extractJsonValue(res, "worker_id"), 0);
+    job.chunkMin = toLL(extractJsonValue(res, "chunk_min"), 0);
+    long long step = toLL(extractJsonValue(res, "chunk_size"), DEFAULT_CHUNK_STEP);
+    if (step <= 0) step = DEFAULT_CHUNK_STEP;
+    job.chunkMax = toLL(extractJsonValue(res, "chunk_max"), job.chunkMin + step);
+    if (job.chunkMax <= job.chunkMin) job.chunkMax = job.chunkMin + step;
 
-    job.blockIndex = safeStoi(extractJsonValue(resJson, "block_index"), fallbackBlock);
-    job.difficulty = safeStoi(extractJsonValue(resJson, "difficulty"), fallbackDiff);
-    job.previousHash = extractJsonValue(resJson, "previous_hash");
+    job.blockIndex = toInt(extractJsonValue(res, "block_index"), fbBlock);
+    job.difficulty = toInt(extractJsonValue(res, "difficulty"), fbDiff);
+    job.previousHash = extractJsonValue(res, "previous_hash");
 
-    std::string balStr = extractJsonValue(resJson, "unclaimed_pool");
-    if (balStr.empty()) balStr = extractJsonValue(resJson, "pool_balance");
-    job.unclaimedPool = safeStod(balStr, fallbackUnclaimed);
+    std::string balStr = extractJsonValue(res, "unclaimed_pool");
+    if (balStr.empty()) balStr = extractJsonValue(res, "pool_balance");
+    job.unclaimedPool = toDouble(balStr, fbPool);
     return job;
 }
 
-void runLocalMining(const std::string& saveFilePath, double& walletBalance, double poolPendingBalance, int& blockIndex, int& difficulty, bool autoMineNext, bool autoDifficulty, long long targetHashrate, long long outputRate, bool isBanned, bool isSpeedModActive, bool isHackerModActive, bool inspectionWait, const std::string& workerName, const std::string& workerToken, bool authed, const std::string& poolUrl) {
-    bool miningSession = true;
-
-    while (miningSession) {
+void runLocalMining(const std::string& saveFile, double& balance, double poolPending, int& blockIdx, int& diff, bool autoMine, bool autoDiff, long long hashrate, long long outRate, bool banned, bool speedMod, bool hackerMod, bool inspectWait, const std::string& workerName, const std::string& workerToken, bool authed, const std::string& poolUrl) {
+    bool running = true;
+    while (running) {
         clearScreen();
-        int numThreads = static_cast<int>(std::thread::hardware_concurrency());
-        if (numThreads < 1) numThreads = 4;
+        int threads = (std::max)(1, static_cast<int>(std::thread::hardware_concurrency()));
+        std::cout << "[SYSTEM] Solo Engine (" << threads << " threads) | Block #" << blockIdx << " | Diff: " << diff << "/20\n"
+                  << "[SYSTEM] Press [ENTER] to abort.\n\n" << std::flush;
 
-        std::cout << "[SYSTEM] Initializing... (" << numThreads << " threads)...\n"
-                  << "[SYSTEM] Resuming Block #" << blockIndex << " | Difficulty: " << difficulty << "/20\n"
-                  << "[SYSTEM] Press [ENTER] at any time to abort.\n\n";
-        flushOut();
+        std::atomic<bool> stop(false), found(false);
+        std::atomic<long long> globalNonce(0), nextLog(outRate);
+        long long winNonce = -1;
+        std::string winHash;
+        std::mutex ioMutex;
 
-        std::atomic<bool> stopMining(false);
-        std::atomic<long long> globalNonce(0);
-        std::atomic<bool> foundMatch(false);
-        std::atomic<long long> nextLogNonce(outputRate);
-
-        long long winningNonce = -1;
-        std::string winningHash = "";
-        std::mutex coutMutex;
-
-        std::string previousHash = simulateHash(std::to_string(GetTickCount64()));
-        std::string basePrefix = previousHash + ":Block#" + std::to_string(blockIndex) + ":Nonce=";
-
-        uint32_t base_state1 = 2166136261UL;
-        uint32_t base_state2 = 3382945747UL;
-        for (char c : basePrefix) {
-            uint32_t val = static_cast<uint32_t>(c);
-            base_state1 = computeASICStep32(base_state1, val);
-            base_state2 = computeASICStep32(base_state2, val * 31);
+        std::string prevHash = simulateHash(std::to_string(GetTickCount64()));
+        std::string prefix = prevHash + ":Block#" + std::to_string(blockIdx) + ":Nonce=";
+        uint32_t b1 = 2166136261UL, b2 = 3382945747UL;
+        for (char c : prefix) {
+            uint32_t v = static_cast<uint32_t>(c);
+            b1 = computeASICStep32(b1, v);
+            b2 = computeASICStep32(b2, v * 31);
         }
 
-        auto blockStartTime = std::chrono::high_resolution_clock::now();
-        std::vector<std::thread> workers;
-        workers.reserve(numThreads);
+        auto t0 = std::chrono::high_resolution_clock::now();
+        std::vector<std::thread> pool;
+        for (int t = 0; t < threads; ++t) {
+            pool.emplace_back([&, b1, b2]() {
+                const long long batch = 50000;
+                while (!stop && !found) {
+                    long long startN = globalNonce.fetch_add(batch, std::memory_order_relaxed);
+                    long long endN = startN + batch;
+                    for (long long n = startN; n < endN && !stop && !found; ++n) {
+                        uint32_t lo = static_cast<uint32_t>(n & 0xFFFFFFFF);
+                        uint32_t hi = static_cast<uint32_t>((n >> 32) & 0xFFFFFFFF);
+                        uint32_t s1 = computeASICStep32(b1, lo);
+                        uint32_t s2 = computeASICStep32(b2, hi ^ lo ^ 0x9e3779b9UL);
+                        s1 ^= (s2 << 11);
+                        s2 ^= (s1 >> 13);
 
-        for (int t = 0; t < numThreads; ++t) {
-            workers.emplace_back([&, base_state1, base_state2]() {
-                const long long batchSize = 50000;
-                while (!stopMining && !foundMatch) {
-                    long long startNonce = globalNonce.fetch_add(batchSize, std::memory_order_relaxed);
-                    long long endNonce = startNonce + batchSize;
-
-                    for (long long currentNonce = startNonce; currentNonce < endNonce && !stopMining && !foundMatch; ++currentNonce) {
-                        uint32_t nonceLow = static_cast<uint32_t>(currentNonce & 0xFFFFFFFF);
-                        uint32_t nonceHigh = static_cast<uint32_t>((currentNonce >> 32) & 0xFFFFFFFF);
-
-                        uint32_t state1 = computeASICStep32(base_state1, nonceLow);
-                        uint32_t state2 = computeASICStep32(base_state2, nonceHigh ^ nonceLow ^ 0x9e3779b9UL);
-
-                        state1 ^= (state2 << 11);
-                        state2 ^= (state1 >> 13);
-
-                        uint32_t part1 = state1 ^ (state2 >> 3);
-                        uint32_t part2 = state2 ^ (state1 << 3);
-                        uint32_t part3 = state1 * 3;
-                        uint32_t part4 = state2 * 5;
-
-                        if (checkDifficultyMatch(part1, part2, part3, part4, difficulty)) {
-                            bool expected = false;
-                            if (foundMatch.compare_exchange_strong(expected, true)) {
-                                winningNonce = currentNonce;
-                                winningHash = formatHashToString(state1, state2);
+                        if (checkDifficultyMatch(s1 ^ (s2 >> 3), s2 ^ (s1 << 3), s1 * 3, s2 * 5, diff)) {
+                            bool exp = false;
+                            if (found.compare_exchange_strong(exp, true)) {
+                                winNonce = n;
+                                winHash = formatHashToString(s1, s2);
                             }
                             break;
                         }
-
-                        if (currentNonce >= nextLogNonce.load(std::memory_order_relaxed)) {
-                            long long targetLog = nextLogNonce.load(std::memory_order_relaxed);
-                            if (currentNonce >= targetLog) {
-                                if (nextLogNonce.compare_exchange_strong(targetLog, targetLog + outputRate)) {
-                                    std::string currentHashStr = formatHashToString(state1, state2);
-                                    std::lock_guard<std::mutex> lock(coutMutex);
-                                    std::cout << "nonce=" << COLOR_YELLOW << targetLog << COLOR_RESET
-                                              << " hash=" << COLOR_RED << currentHashStr << COLOR_RESET << "\n" << std::flush;
-                                }
-                            }
+                        long long logAt = nextLog.load(std::memory_order_relaxed);
+                        if (n >= logAt && nextLog.compare_exchange_strong(logAt, logAt + outRate)) {
+                            std::lock_guard<std::mutex> lk(ioMutex);
+                            std::cout << "nonce=" << COLOR_YELLOW << logAt << COLOR_RESET
+                                      << " hash=" << COLOR_RED << formatHashToString(s1, s2) << COLOR_RESET << "\n" << std::flush;
                         }
                     }
                 }
             });
         }
 
-        while (!foundMatch && !stopMining) {
-            if (checkUserPressedEnter()) {
-                stopMining = true;
-                break;
-            }
+        while (!found && !stop) {
+            if (pressedEnter()) { stop = true; break; }
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
+        stop = true;
+        for (auto& th : pool) if (th.joinable()) th.join();
 
-        stopMining = true;
-        for (auto& th : workers) {
-            if (th.joinable()) th.join();
-        }
-
-        if (foundMatch) {
-            auto blockEndTime = std::chrono::high_resolution_clock::now();
-            double durationSec = std::chrono::duration<double>(blockEndTime - blockStartTime).count();
-            double dynamicReward = 0.000005 * std::pow(1.6, difficulty - 1);
-
-            std::cout << "\n----------------------------------------\n"
-                      << "[" << getCurrentTime() << "] [Block #" << blockIndex << "] MATCHED (DIFFICULTY " << difficulty << "/20)!\n"
-                      << "  > winning_nonce : " << COLOR_YELLOW << winningNonce << COLOR_RESET << "\n"
-                      << "  > target_hash   : " << COLOR_GREEN << winningHash << COLOR_RESET << "\n"
-                      << "  > time_taken    : " << std::fixed << std::setprecision(2) << durationSec << " s\n"
-                      << "  > reward_added  : +" << std::fixed << std::setprecision(8) << dynamicReward << " BTC (Exponential Tier)\n"
-                      << "----------------------------------------\n";
-            flushOut();
-
-            walletBalance += dynamicReward;
-            blockIndex++;
-
-            if (autoDifficulty) {
-                if (durationSec < 0.8) difficulty = (std::min)(20, difficulty + 4);
-                else if (durationSec < 2.5) difficulty = (std::min)(20, difficulty + 2);
-                else if (durationSec < 7.0) difficulty++;
-                else if (durationSec > 22.0 && difficulty > 3) difficulty = (std::max)(3, difficulty - 2);
+        if (found) {
+            double sec = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - t0).count();
+            double reward = 0.000005 * std::pow(1.6, diff - 1);
+            balance += reward;
+            blockIdx++;
+            if (autoDiff) {
+                if (sec < 0.8) diff = (std::min)(20, diff + 4);
+                else if (sec < 2.5) diff = (std::min)(20, diff + 2);
+                else if (sec < 7.0) diff = (std::min)(20, diff + 1);
+                else if (sec > 22.0 && diff > 3) diff = (std::max)(3, diff - 2);
             }
-
-            saveGameState(saveFilePath, walletBalance, poolPendingBalance, blockIndex, difficulty, autoMineNext, autoDifficulty, targetHashrate, outputRate, isBanned, isSpeedModActive, isHackerModActive, inspectionWait, workerName, workerToken, authed, poolUrl);
-
-            if (inspectionWait) {
-                std::cout << "[WAIT] 5s Inspection...\n\n";
-                flushOut();
-                std::this_thread::sleep_for(std::chrono::seconds(5));
-            }
-
-            if (!autoMineNext) {
-                waitForEnter("Press [ENTER] to return to menu...");
-                miningSession = false;
-            } else {
-                std::this_thread::sleep_for(std::chrono::milliseconds(300));
-            }
+            std::cout << "\n[" << getCurrentTime() << "] MATCHED nonce=" << COLOR_YELLOW << winNonce << COLOR_RESET
+                      << " hash=" << COLOR_GREEN << winHash << COLOR_RESET
+                      << " +" << std::fixed << std::setprecision(8) << reward << " BTC\n" << std::flush;
+            saveState(saveFile, balance, poolPending, blockIdx, diff, autoMine, autoDiff, hashrate, outRate, banned, speedMod, hackerMod, inspectWait, workerName, workerToken, authed, poolUrl);
+            if (inspectWait) std::this_thread::sleep_for(std::chrono::seconds(5));
+            if (!autoMine) { waitEnter(); running = false; }
         } else {
-            std::cout << "\n[ABORT] Interrupted by user. Returning to menu...\n";
-            flushOut();
-            saveGameState(saveFilePath, walletBalance, poolPendingBalance, blockIndex, difficulty, autoMineNext, autoDifficulty, targetHashrate, outputRate, isBanned, isSpeedModActive, isHackerModActive, inspectionWait, workerName, workerToken, authed, poolUrl);
-            std::this_thread::sleep_for(std::chrono::milliseconds(300));
-            miningSession = false;
+            std::cout << "\n[ABORT] Returning to menu...\n" << std::flush;
+            saveState(saveFile, balance, poolPending, blockIdx, diff, autoMine, autoDiff, hashrate, outRate, banned, speedMod, hackerMod, inspectWait, workerName, workerToken, authed, poolUrl);
+            running = false;
         }
     }
 }
 
-void runPoolMining(const std::string& baseDir, const std::string& saveFilePath, double& walletBalance, double& poolPendingBalance, int& blockIndex, int& difficulty, bool autoMineNext, bool autoDifficulty, long long targetHashrate, long long outputRate, bool isBanned, bool isSpeedModActive, bool isHackerModActive, bool inspectionWait, const std::string& workerName, const std::string& workerToken, bool& authed, std::string& poolUrl) {
+void runPoolMining(const std::string& saveFile, double& balance, double& poolPending, int& blockIdx, int& diff, bool autoMine, bool autoDiff, long long hashrate, long long outRate, bool banned, bool speedMod, bool hackerMod, bool inspectWait, const std::string& workerName, const std::string& workerToken, bool& authed, std::string& poolUrl) {
     if (!authed || workerToken.empty()) {
-        std::cout << "\n" << COLOR_RED << "Could not authorize the user, please try again.\n" << COLOR_RESET;
-        flushOut();
+        std::cout << "\n" << COLOR_RED << "Could not authorize the user, please try again.\n" << COLOR_RESET << std::flush;
         std::this_thread::sleep_for(std::chrono::seconds(2));
         return;
     }
-
     if (poolUrl.empty()) {
-        std::cout << "\nEnter Pool URL (e.g., https://pool.wispbyte.org): ";
-        flushOut();
-        if (!(std::cin >> poolUrl)) {
-            discardRestOfLine();
-            return;
-        }
-        discardRestOfLine();
+        std::cout << "\nEnter Pool URL (e.g., https://pool.wispbyte.org): " << std::flush;
+        if (!(std::cin >> poolUrl)) { discardLine(); return; }
+        discardLine();
         if (!poolUrl.empty() && poolUrl.back() == '/') poolUrl.pop_back();
-        saveGameState(saveFilePath, walletBalance, poolPendingBalance, blockIndex, difficulty, autoMineNext, autoDifficulty, targetHashrate, outputRate, isBanned, isSpeedModActive, isHackerModActive, inspectionWait, workerName, workerToken, authed, poolUrl);
+        saveState(saveFile, balance, poolPending, blockIdx, diff, autoMine, autoDiff, hashrate, outRate, banned, speedMod, hackerMod, inspectWait, workerName, workerToken, authed, poolUrl);
     }
 
-    bool poolSession = true;
-    bool nextRequestExhausted = false;
-
-    while (poolSession) {
+    bool running = true;
+    bool nextExhausted = false;
+    while (running) {
         clearScreen();
-        int numThreads = static_cast<int>(std::thread::hardware_concurrency());
-        if (numThreads < 1) numThreads = 4;
-
-        PoolJob job = requestPoolJob(poolUrl, workerName, workerToken, blockIndex, difficulty, poolPendingBalance, nextRequestExhausted);
-        nextRequestExhausted = false;
+        int threads = (std::max)(1, static_cast<int>(std::thread::hardware_concurrency()));
+        PoolJob job = requestPoolJob(poolUrl, workerName, workerToken, blockIdx, diff, poolPending, nextExhausted);
+        nextExhausted = false;
 
         if (job.unauthorized) {
-            std::cout << COLOR_RED << job.message << "\n" << COLOR_RESET;
-            flushOut();
+            std::cout << COLOR_RED << job.message << "\n" << COLOR_RESET << std::flush;
             authed = false;
-            saveGameState(saveFilePath, walletBalance, poolPendingBalance, blockIndex, difficulty, autoMineNext, autoDifficulty, targetHashrate, outputRate, isBanned, isSpeedModActive, isHackerModActive, inspectionWait, workerName, workerToken, authed, poolUrl);
+            saveState(saveFile, balance, poolPending, blockIdx, diff, autoMine, autoDiff, hashrate, outRate, banned, speedMod, hackerMod, inspectWait, workerName, workerToken, authed, poolUrl);
             std::this_thread::sleep_for(std::chrono::seconds(2));
             break;
         }
-
         if (!job.valid) {
-            std::cout << COLOR_RED << "[ERROR] Cannot reach Pool Host at " << poolUrl << ". Retrying in 3s...\n" << COLOR_RESET;
-            flushOut();
-            if (checkUserPressedEnter()) break;
+            std::cout << COLOR_RED << "[ERROR] Unreachable pool: " << poolUrl << "\n" << COLOR_RESET << std::flush;
+            if (pressedEnter()) break;
             std::this_thread::sleep_for(std::chrono::seconds(3));
             continue;
         }
 
-        long long workerId = job.workerId;
-        long long chunkMin = job.chunkMin;
-        long long chunkMax = job.chunkMax;
-        int poolBlockIndex = job.blockIndex;
-        int poolDifficulty = job.difficulty;
-        std::string pPrevHash = job.previousHash;
-        poolPendingBalance = job.unclaimedPool;
+        long long cMin = job.chunkMin, cMax = job.chunkMax;
+        int pBlock = job.blockIndex, pDiff = job.difficulty;
+        poolPending = job.unclaimedPool;
 
-        std::cout << "[SYSTEM] Initializing... (ID: " << workerId << " | Chunk: [" << chunkMin << ".." << chunkMax << ") | Threads: " << numThreads << ")...\n"
-                  << "[SYSTEM] Mining Pool Block #" << poolBlockIndex << " | Difficulty: " << poolDifficulty << "/20 | Unclaimed: " << COLOR_YELLOW << std::fixed << std::setprecision(8) << poolPendingBalance << " BTC" << COLOR_RESET << "\n"
-                  << "[SYSTEM] Press [ENTER] at any time to abort.\n\n";
-        flushOut();
+        std::cout << "[POOL] ID:" << job.workerId << " | Chunk:[" << cMin << ".." << cMax << ") | Block #" << pBlock
+                  << " | Diff:" << pDiff << "/20 | Unclaimed:" << COLOR_YELLOW << std::fixed << std::setprecision(8) << poolPending << " BTC" << COLOR_RESET << "\n"
+                  << "[SYSTEM] Press [ENTER] to abort.\n\n" << std::flush;
 
-        std::atomic<bool> stopMining(false);
-        std::atomic<long long> globalNonce(chunkMin);
-        std::atomic<bool> foundMatch(false);
-        std::atomic<bool> chunkExhausted(false);
-        std::atomic<long long> nextLogNonce(chunkMin + outputRate);
+        std::atomic<bool> stop(false), found(false), exhausted(false);
+        std::atomic<long long> globalNonce(cMin), nextLog(cMin + outRate);
+        long long winNonce = -1;
+        std::string winHash;
+        std::mutex ioMutex;
 
-        long long winningNonce = -1;
-        std::string winningHash = "";
-        std::mutex coutMutex;
-
-        std::string basePrefix = pPrevHash + ":Block#" + std::to_string(poolBlockIndex) + ":Nonce=";
-        uint32_t base_state1 = 2166136261UL;
-        uint32_t base_state2 = 3382945747UL;
-        for (char c : basePrefix) {
-            uint32_t val = static_cast<uint32_t>(c);
-            base_state1 = computeASICStep32(base_state1, val);
-            base_state2 = computeASICStep32(base_state2, val * 31);
+        std::string prefix = job.previousHash + ":Block#" + std::to_string(pBlock) + ":Nonce=";
+        uint32_t b1 = 2166136261UL, b2 = 3382945747UL;
+        for (char c : prefix) {
+            uint32_t v = static_cast<uint32_t>(c);
+            b1 = computeASICStep32(b1, v);
+            b2 = computeASICStep32(b2, v * 31);
         }
 
-        auto blockStartTime = std::chrono::high_resolution_clock::now();
-        std::vector<std::thread> workers;
-        workers.reserve(numThreads);
+        auto t0 = std::chrono::high_resolution_clock::now();
+        std::vector<std::thread> pool;
+        for (int t = 0; t < threads; ++t) {
+            pool.emplace_back([&, b1, b2, cMax]() {
+                const long long batch = 50000;
+                while (!stop && !found && !exhausted.load(std::memory_order_relaxed)) {
+                    long long startN = globalNonce.fetch_add(batch, std::memory_order_relaxed);
+                    if (startN >= cMax) { exhausted.store(true, std::memory_order_relaxed); break; }
+                    long long endN = (std::min)(startN + batch, cMax);
+                    for (long long n = startN; n < endN && !stop && !found; ++n) {
+                        uint32_t lo = static_cast<uint32_t>(n & 0xFFFFFFFF);
+                        uint32_t hi = static_cast<uint32_t>((n >> 32) & 0xFFFFFFFF);
+                        uint32_t s1 = computeASICStep32(b1, lo);
+                        uint32_t s2 = computeASICStep32(b2, hi ^ lo ^ 0x9e3779b9UL);
+                        s1 ^= (s2 << 11);
+                        s2 ^= (s1 >> 13);
 
-        for (int t = 0; t < numThreads; ++t) {
-            workers.emplace_back([&, base_state1, base_state2, chunkMax]() {
-                const long long batchSize = 50000;
-                while (!stopMining && !foundMatch && !chunkExhausted.load(std::memory_order_relaxed)) {
-                    long long startNonce = globalNonce.fetch_add(batchSize, std::memory_order_relaxed);
-                    if (startNonce >= chunkMax) {
-                        chunkExhausted.store(true, std::memory_order_relaxed);
-                        break;
-                    }
-                    long long endNonce = (std::min)(startNonce + batchSize, chunkMax);
-
-                    for (long long currentNonce = startNonce; currentNonce < endNonce && !stopMining && !foundMatch; ++currentNonce) {
-                        uint32_t nonceLow = static_cast<uint32_t>(currentNonce & 0xFFFFFFFF);
-                        uint32_t nonceHigh = static_cast<uint32_t>((currentNonce >> 32) & 0xFFFFFFFF);
-
-                        uint32_t state1 = computeASICStep32(base_state1, nonceLow);
-                        uint32_t state2 = computeASICStep32(base_state2, nonceHigh ^ nonceLow ^ 0x9e3779b9UL);
-
-                        state1 ^= (state2 << 11);
-                        state2 ^= (state1 >> 13);
-
-                        uint32_t part1 = state1 ^ (state2 >> 3);
-                        uint32_t part2 = state2 ^ (state1 << 3);
-                        uint32_t part3 = state1 * 3;
-                        uint32_t part4 = state2 * 5;
-
-                        if (checkDifficultyMatch(part1, part2, part3, part4, poolDifficulty)) {
-                            bool expected = false;
-                            if (foundMatch.compare_exchange_strong(expected, true)) {
-                                winningNonce = currentNonce;
-                                winningHash = formatHashToString(state1, state2);
+                        if (checkDifficultyMatch(s1 ^ (s2 >> 3), s2 ^ (s1 << 3), s1 * 3, s2 * 5, pDiff)) {
+                            bool exp = false;
+                            if (found.compare_exchange_strong(exp, true)) {
+                                winNonce = n;
+                                winHash = formatHashToString(s1, s2);
                             }
                             break;
                         }
-
-                        if (currentNonce >= nextLogNonce.load(std::memory_order_relaxed)) {
-                            long long targetLog = nextLogNonce.load(std::memory_order_relaxed);
-                            if (currentNonce >= targetLog) {
-                                if (nextLogNonce.compare_exchange_strong(targetLog, targetLog + outputRate)) {
-                                    std::string currentHashStr = formatHashToString(state1, state2);
-                                    std::lock_guard<std::mutex> lock(coutMutex);
-                                    std::cout << "nonce=" << COLOR_YELLOW << targetLog << COLOR_RESET
-                                              << " hash=" << COLOR_RED << currentHashStr << COLOR_RESET << "\n" << std::flush;
-                                }
-                            }
+                        long long logAt = nextLog.load(std::memory_order_relaxed);
+                        if (n >= logAt && nextLog.compare_exchange_strong(logAt, logAt + outRate)) {
+                            std::lock_guard<std::mutex> lk(ioMutex);
+                            std::cout << "nonce=" << COLOR_YELLOW << logAt << COLOR_RESET
+                                      << " hash=" << COLOR_RED << formatHashToString(s1, s2) << COLOR_RESET << "\n" << std::flush;
                         }
                     }
                 }
             });
         }
 
-        auto lastSyncCheck = std::chrono::steady_clock::now();
-        bool serverBlockAdvanced = false;
-
-        while (!foundMatch && !stopMining && !chunkExhausted.load(std::memory_order_relaxed)) {
-            if (checkUserPressedEnter()) {
-                stopMining = true;
-                break;
-            }
-
+        auto lastPoll = std::chrono::steady_clock::now();
+        bool blockChanged = false;
+        while (!found && !stop && !exhausted.load(std::memory_order_relaxed)) {
+            if (pressedEnter()) { stop = true; break; }
             auto now = std::chrono::steady_clock::now();
-            if (std::chrono::duration_cast<std::chrono::seconds>(now - lastSyncCheck).count() >= 1) {
-                lastSyncCheck = now;
-                std::string statusJson = execCurl("curl -s -L -A \"MinerClient\" -m 2 \"" + poolUrl + "/?worker=" + workerName + "\"");
-                if (!statusJson.empty()) {
-                    std::string rBlk = extractJsonValue(statusJson, "block");
-                    if (rBlk.empty()) rBlk = extractJsonValue(statusJson, "block_index");
-                    int remoteBlock = safeStoi(rBlk, poolBlockIndex);
-                    int remoteDiff = safeStoi(extractJsonValue(statusJson, "difficulty"), poolDifficulty);
-                    if (remoteBlock > poolBlockIndex || remoteDiff != poolDifficulty) {
-                        serverBlockAdvanced = true;
-                        stopMining = true;
+            if (std::chrono::duration_cast<std::chrono::seconds>(now - lastPoll).count() >= 1) {
+                lastPoll = now;
+                std::string st = httpGet(poolUrl + "/?worker=" + workerName, 2);
+                if (!st.empty()) {
+                    std::string rb = extractJsonValue(st, "block");
+                    if (rb.empty()) rb = extractJsonValue(st, "block_index");
+                    if (toInt(rb, pBlock) > pBlock || toInt(extractJsonValue(st, "difficulty"), pDiff) != pDiff) {
+                        blockChanged = true;
+                        stop = true;
                         break;
                     }
                 }
             }
-
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
 
-        stopMining = true;
-        for (auto& th : workers) {
-            if (th.joinable()) th.join();
-        }
+        stop = true;
+        for (auto& th : pool) if (th.joinable()) th.join();
 
-        if (serverBlockAdvanced) {
-            std::cout << "\n" << COLOR_CYAN << "[SYNC] Detected new block/diff from pool. Requesting new chunk..." << COLOR_RESET << "\n";
-            flushOut();
-            std::this_thread::sleep_for(std::chrono::milliseconds(200));
-            continue;
-        }
-
-        if (foundMatch) {
-            auto blockEndTime = std::chrono::high_resolution_clock::now();
-            double durationSec = std::chrono::duration<double>(blockEndTime - blockStartTime).count();
-
-            std::string payload = "{\"worker\":\"" + workerName + "\",\"token\":\"" + workerToken + "\",\"block_index\":" + std::to_string(poolBlockIndex) + ",\"winning_nonce\":" + std::to_string(winningNonce) + ",\"duration_sec\":" + std::to_string(durationSec) + "}";
-            std::string submitRes = execCurlJsonPost(baseDir, poolUrl + "/submit", payload, 8);
-
-            std::string status = cleanJsonString(extractJsonValue(submitRes, "status"));
-            double dynamicReward = 0.000005 * std::pow(1.6, poolDifficulty - 1);
-
-            if (status == "accepted") {
-                std::string sBal = extractJsonValue(submitRes, "unclaimed_pool");
-                if (sBal.empty()) sBal = extractJsonValue(submitRes, "pool_balance");
-                poolPendingBalance = safeStod(sBal, poolPendingBalance);
-
-                std::cout << "\n----------------------------------------\n"
-                          << "[" << getCurrentTime() << "] [Block #" << poolBlockIndex << "] MATCHED BY [" << COLOR_CYAN << workerName << COLOR_RESET << "] (DIFFICULTY " << poolDifficulty << "/20)!\n"
-                          << "  > winning_nonce : " << COLOR_YELLOW << winningNonce << COLOR_RESET << "\n"
-                          << "  > target_hash   : " << COLOR_GREEN << winningHash << COLOR_RESET << "\n"
-                          << "  > time_taken    : " << std::fixed << std::setprecision(2) << durationSec << " s\n"
-                          << "  > reward_added  : +" << std::fixed << std::setprecision(8) << dynamicReward << " BTC (Pool Credited)\n"
-                          << "  > pool_balance  : " << COLOR_YELLOW << std::fixed << std::setprecision(8) << poolPendingBalance << " BTC" << COLOR_RESET << "\n"
-                          << "----------------------------------------\n";
+        if (blockChanged) continue;
+        if (found) {
+            double sec = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - t0).count();
+            std::string subRes = httpPostSubmit(poolUrl + "/submit", workerName, workerToken, pBlock, winNonce, sec, 8);
+            if (trimClean(extractJsonValue(subRes, "status")) == "accepted") {
+                std::string bStr = extractJsonValue(subRes, "unclaimed_pool");
+                if (bStr.empty()) bStr = extractJsonValue(subRes, "pool_balance");
+                poolPending = toDouble(bStr, poolPending);
+                std::cout << "\n[" << getCurrentTime() << "] ACCEPTED nonce=" << COLOR_YELLOW << winNonce << COLOR_RESET
+                          << " pool_unclaimed=" << COLOR_YELLOW << std::fixed << std::setprecision(8) << poolPending << " BTC" << COLOR_RESET << "\n" << std::flush;
             } else {
-                std::cout << "\n" << COLOR_RED << "[REJECTED] Server response: " << (submitRes.empty() ? "Connection Timeout" : submitRes) << COLOR_RESET << "\n";
+                std::cout << "\n" << COLOR_RED << "[REJECTED] " << (subRes.empty() ? "Timeout" : subRes) << COLOR_RESET << "\n" << std::flush;
             }
-            flushOut();
-
-            saveGameState(saveFilePath, walletBalance, poolPendingBalance, blockIndex, difficulty, autoMineNext, autoDifficulty, targetHashrate, outputRate, isBanned, isSpeedModActive, isHackerModActive, inspectionWait, workerName, workerToken, authed, poolUrl);
-
-            if (inspectionWait) {
-                std::cout << "[WAIT] 5s Inspection...\n\n";
-                flushOut();
-                std::this_thread::sleep_for(std::chrono::seconds(5));
-            }
-
-            if (!autoMineNext) {
-                waitForEnter("Press [ENTER] to return to menu...");
-                poolSession = false;
-            } else {
-                std::this_thread::sleep_for(std::chrono::milliseconds(300));
-            }
-        } else if (chunkExhausted.load(std::memory_order_relaxed)) {
-            nextRequestExhausted = true;
-            std::cout << "\n" << COLOR_CYAN << "[CHUNK] Completed [" << chunkMin << ".." << chunkMax << "). Requesting next job from pool..." << COLOR_RESET << "\n";
-            flushOut();
-            std::this_thread::sleep_for(std::chrono::milliseconds(150));
-            continue;
+            saveState(saveFile, balance, poolPending, blockIdx, diff, autoMine, autoDiff, hashrate, outRate, banned, speedMod, hackerMod, inspectWait, workerName, workerToken, authed, poolUrl);
+            if (inspectWait) std::this_thread::sleep_for(std::chrono::seconds(5));
+            if (!autoMine) { waitEnter(); running = false; }
+        } else if (exhausted.load(std::memory_order_relaxed)) {
+            nextExhausted = true;
         } else {
-            std::cout << "\n[ABORT] Interrupted by user. Returning to menu...\n";
-            flushOut();
-            saveGameState(saveFilePath, walletBalance, poolPendingBalance, blockIndex, difficulty, autoMineNext, autoDifficulty, targetHashrate, outputRate, isBanned, isSpeedModActive, isHackerModActive, inspectionWait, workerName, workerToken, authed, poolUrl);
-            std::this_thread::sleep_for(std::chrono::milliseconds(300));
-            poolSession = false;
+            saveState(saveFile, balance, poolPending, blockIdx, diff, autoMine, autoDiff, hashrate, outRate, banned, speedMod, hackerMod, inspectWait, workerName, workerToken, authed, poolUrl);
+            running = false;
         }
     }
 }
 
-void runStandardOptions(const std::string& saveFilePath, double& walletBalance, double poolPendingBalance, int& blockIndex, int& difficulty, bool& autoMineNext, bool& autoDifficulty, long long& targetHashrate, long long& outputRate, bool& isBanned, bool isSpeedModActive, bool isHackerModActive, bool& inspectionWait, const std::string& workerName, const std::string& workerToken, bool authed, const std::string& poolUrl) {
-    int optChoice = 0;
+void runStandardOptions(const std::string& saveFile, double& balance, double poolPending, int& blockIdx, int& diff, bool& autoMine, bool& autoDiff, long long& hashrate, long long& outRate, bool banned, bool speedMod, bool hackerMod, bool& inspectWait, const std::string& workerName, const std::string& workerToken, bool authed, const std::string& poolUrl) {
     while (true) {
         clearScreen();
-        std::cout << "> miner_options\n"
-                  << "----------------------------------------\n";
-
-        int idx = 1;
-        int optMap[10];
-
-        if (isHackerModActive) {
-            std::cout << "  [" << idx << "] set_difficulty : " << difficulty << " [MOD]\n";
-            optMap[idx++] = 1;
-            std::cout << "  [" << idx << "] auto_difficulty: " << (autoDifficulty ? "ON" : "OFF") << " [MOD]\n";
-            optMap[idx++] = 2;
+        int idx = 1, map[10];
+        std::cout << "> miner_options\n----------------------------------------\n";
+        if (hackerMod) {
+            std::cout << "  [" << idx << "] set_difficulty : " << diff << " [MOD]\n"; map[idx++] = 1;
+            std::cout << "  [" << idx << "] auto_difficulty: " << (autoDiff ? "ON" : "OFF") << " [MOD]\n"; map[idx++] = 2;
         }
+        std::cout << "  [" << idx << "] auto_mine_next : " << (autoMine ? "ON" : "OFF") << "\n"; map[idx++] = 3;
+        std::cout << "  [" << idx << "] inspection_wait: " << (inspectWait ? "ON" : "OFF") << "\n"; map[idx++] = 4;
+        std::cout << "  [" << idx << "] output_rate    : " << outRate << "\n"; map[idx++] = 5;
+        if (speedMod) { std::cout << "  [" << idx << "] set_hashrate   : UNLIMITED [MOD]\n"; map[idx++] = 6; }
+        std::cout << "  [" << idx << "] back_to_main\n----------------------------------------\nroot@miner/options# " << std::flush;
 
-        std::cout << "  [" << idx << "] auto_mine_next : " << (autoMineNext ? "ON" : "OFF") << "\n";
-        optMap[idx++] = 3;
-
-        std::cout << "  [" << idx << "] inspection_wait: " << (inspectionWait ? "ON" : "OFF") << "\n";
-        optMap[idx++] = 4;
-
-        std::cout << "  [" << idx << "] output_rate    : " << outputRate << " nonces/log\n";
-        optMap[idx++] = 5;
-
-        if (isSpeedModActive) {
-            std::cout << "  [" << idx << "] set_hashrate   : UNLIMITED (INF) [MOD]\n";
-            optMap[idx++] = 6;
+        int ch = 0;
+        if (!(std::cin >> ch)) { discardLine(); continue; }
+        discardLine();
+        if (ch == idx) break;
+        if (ch >= 1 && ch < idx) {
+            int act = map[ch];
+            if (act == 1) { std::cout << "Difficulty (1-20): " << std::flush; if (std::cin >> diff) diff = (std::clamp)(diff, 1, 20); discardLine(); }
+            else if (act == 2) autoDiff = !autoDiff;
+            else if (act == 3) autoMine = !autoMine;
+            else if (act == 4) inspectWait = !inspectWait;
+            else if (act == 5) { std::cout << "Output rate: " << std::flush; if (std::cin >> outRate) outRate = (std::max)(1000LL, outRate); discardLine(); }
+            else if (act == 6) { std::cout << "[MOD] UNLIMITED!\n" << std::flush; std::this_thread::sleep_for(std::chrono::seconds(1)); }
         }
-
-        std::cout << "  [" << idx << "] back_to_main\n";
-        int backChoiceId = idx;
-        std::cout << "----------------------------------------\n"
-                  << "root@miner/options# ";
-        flushOut();
-
-        if (!(std::cin >> optChoice)) {
-            discardRestOfLine();
-            continue;
-        }
-        discardRestOfLine();
-
-        if (optChoice == backChoiceId) break;
-
-        if (optChoice >= 1 && optChoice < backChoiceId) {
-            int selectedAction = optMap[optChoice];
-            if (selectedAction == 1) {
-                std::cout << "Enter difficulty (1-20): ";
-                flushOut();
-                if (std::cin >> difficulty) {
-                    discardRestOfLine();
-                    if (difficulty < 1) difficulty = 1;
-                    if (difficulty > 20) difficulty = 20;
-                } else {
-                    discardRestOfLine();
-                }
-            } else if (selectedAction == 2) {
-                autoDifficulty = !autoDifficulty;
-            } else if (selectedAction == 3) {
-                autoMineNext = !autoMineNext;
-            } else if (selectedAction == 4) {
-                inspectionWait = !inspectionWait;
-            } else if (selectedAction == 5) {
-                std::cout << "Enter output rate (log interval): ";
-                flushOut();
-                if (std::cin >> outputRate) {
-                    discardRestOfLine();
-                    if (outputRate < 1000) outputRate = 1000;
-                } else {
-                    discardRestOfLine();
-                }
-            } else if (selectedAction == 6) {
-                std::cout << "[MOD] Hashrate is locked to UNLIMITED (INF)!\n";
-                flushOut();
-                std::this_thread::sleep_for(std::chrono::seconds(1));
-            }
-        }
-        saveGameState(saveFilePath, walletBalance, poolPendingBalance, blockIndex, difficulty, autoMineNext, autoDifficulty, targetHashrate, outputRate, isBanned, isSpeedModActive, isHackerModActive, inspectionWait, workerName, workerToken, authed, poolUrl);
+        saveState(saveFile, balance, poolPending, blockIdx, diff, autoMine, autoDiff, hashrate, outRate, banned, speedMod, hackerMod, inspectWait, workerName, workerToken, authed, poolUrl);
     }
 }
 
-void runPoolOptions(const std::string& baseDir, const std::string& saveFilePath, double& walletBalance, double& poolPendingBalance, int blockIndex, int difficulty, bool autoMineNext, bool autoDifficulty, long long targetHashrate, long long outputRate, bool isBanned, bool isSpeedModActive, bool isHackerModActive, bool inspectionWait, std::string& workerName, std::string& workerToken, bool& authed, std::string& poolUrl) {
-    int pChoice = 0;
+void runPoolOptions(const std::string& saveFile, double& balance, double& poolPending, int blockIdx, int diff, bool autoMine, bool autoDiff, long long hashrate, long long outRate, bool banned, bool speedMod, bool hackerMod, bool inspectWait, std::string& workerName, std::string& workerToken, bool& authed, std::string& poolUrl) {
     while (true) {
         if (!poolUrl.empty() && !workerName.empty()) {
-            std::string uncRes = execCurl("curl -s -L -A \"MinerClient\" -m 4 \"" + poolUrl + "/unclaimed?worker=" + workerName + "\"");
-            if (!uncRes.empty()) {
-                std::string uStr = extractJsonValue(uncRes, "unclaimed_pool");
-                if (uStr.empty()) uStr = extractJsonValue(uncRes, "pool_balance");
-                if (!uStr.empty()) poolPendingBalance = safeStod(uStr, poolPendingBalance);
+            std::string uRes = httpGet(poolUrl + "/unclaimed?worker=" + workerName, 4);
+            if (!uRes.empty()) {
+                std::string b = extractJsonValue(uRes, "unclaimed_pool");
+                if (b.empty()) b = extractJsonValue(uRes, "pool_balance");
+                if (!b.empty()) poolPending = toDouble(b, poolPending);
             }
         }
         clearScreen();
-        int idx = 1;
-        int optSetWorker = -1, optSetUrl = -1, optClaim = -1, optBack = -1;
-
         std::cout << "> pool_options\n"
-                  << "----------------------------------------\n";
-        std::cout << "  [" << idx << "] set_worker" << (authed ? " (re-auth/new)" : "") << "\n";
-        optSetWorker = idx++;
+                  << "----------------------------------------\n"
+                  << "  [1] set_worker" << (authed ? " (re-auth/new)" : "") << "\n"
+                  << "  [2] set_pool_url : " << (poolUrl.empty() ? "None" : poolUrl) << "\n"
+                  << "  [3] claim_pool\n"
+                  << "  [4] back_to_main\n"
+                  << "----------------------------------------\n"
+                  << "root@miner/pool_options# " << std::flush;
 
-        std::cout << "  [" << idx << "] set_pool_url : " << (poolUrl.empty() ? "None" : poolUrl) << "\n";
-        optSetUrl = idx++;
+        int ch = 0;
+        if (!(std::cin >> ch)) { discardLine(); continue; }
+        discardLine();
 
-        std::cout << "  [" << idx << "] claim_pool\n";
-        optClaim = idx++;
-
-        std::cout << "  [" << idx << "] back_to_main\n";
-        optBack = idx++;
-
-        std::cout << "----------------------------------------\n"
-                  << "root@miner/pool_options# ";
-        flushOut();
-
-        if (!(std::cin >> pChoice)) {
-            discardRestOfLine();
-            continue;
-        }
-        discardRestOfLine();
-
-        if (pChoice == optBack) break;
-
-        if (pChoice == optSetWorker) {
+        if (ch == 4) break;
+        if (ch == 1) {
             if (poolUrl.empty()) {
-                std::cout << COLOR_RED << "[ERROR] Configure Pool URL first!\n" << COLOR_RESET;
-                flushOut();
+                std::cout << COLOR_RED << "[ERROR] Set Pool URL first!\n" << COLOR_RESET << std::flush;
                 std::this_thread::sleep_for(std::chrono::seconds(1));
                 continue;
             }
-            std::cout << "\n  [1] Create\n"
-                      << "  [2] Auth\n"
-                      << "Select: ";
-            flushOut();
-            int subMode = 0;
-            if (!(std::cin >> subMode)) {
-                discardRestOfLine();
-                continue;
-            }
-            discardRestOfLine();
+            std::cout << "\n  [1] Create\n  [2] Auth\nSelect: " << std::flush;
+            int mode = 0;
+            if (!(std::cin >> mode)) { discardLine(); continue; }
+            discardLine();
 
-            if (subMode == 1) {
-                std::string inputName, inputToken;
-                std::cout << "Set name: ";
-                flushOut();
-                if (!(std::cin >> inputName)) {
-                    discardRestOfLine();
-                    continue;
-                }
-                discardRestOfLine();
+            if (mode == 1) {
+                std::string name, tok;
+                std::cout << "Set name: " << std::flush;
+                if (!(std::cin >> name)) { discardLine(); continue; }
+                discardLine();
 
-                std::string chkRes = execCurl("curl -s -L -A \"MinerClient\" -m 5 \"" + poolUrl + "/check_name?worker=" + inputName + "\"");
-                if (chkRes.empty()) {
-                    std::cout << COLOR_RED << "[ERROR] Cannot reach Pool Host at " << poolUrl << "\n" << COLOR_RESET;
-                    flushOut();
+                std::string chk = httpGet(poolUrl + "/check_name?worker=" + name, 5);
+                if (chk.empty() || chk.find("\"available\"") == std::string::npos) {
+                    std::cout << COLOR_RED << "[ERROR] Cannot reach/parse pool at " << poolUrl << "\n" << COLOR_RESET << std::flush;
                     std::this_thread::sleep_for(std::chrono::seconds(2));
                     continue;
                 }
-                if (cleanJsonString(extractJsonValue(chkRes, "available")) != "true") {
-                    std::cout << COLOR_RED << "Name is already taken by another worker.\n" << COLOR_RESET;
-                    flushOut();
+                if (trimClean(extractJsonValue(chk, "available")) != "true") {
+                    std::cout << COLOR_RED << "Name is already taken by another worker.\n" << COLOR_RESET << std::flush;
                     std::this_thread::sleep_for(std::chrono::seconds(2));
                     continue;
                 }
 
-                std::cout << "Set token: ";
-                flushOut();
-                if (!(std::cin >> inputToken)) {
-                    discardRestOfLine();
-                    continue;
-                }
-                discardRestOfLine();
+                std::cout << "Set token: " << std::flush;
+                if (!(std::cin >> tok)) { discardLine(); continue; }
+                discardLine();
 
-                std::string payload = "{\"worker\":\"" + inputName + "\",\"token\":\"" + inputToken + "\"}";
-                std::string regRes = execCurlJsonPost(baseDir, poolUrl + "/register_worker", payload, 8);
-                if (cleanJsonString(extractJsonValue(regRes, "status")) == "ok") {
-                    workerName = inputName;
-                    workerToken = inputToken;
+                std::string reg = httpPostJson(poolUrl + "/register_worker", name, tok, 8);
+                std::string st = trimClean(extractJsonValue(reg, "status"));
+                if (st == "ok") {
+                    workerName = name;
+                    workerToken = tok;
                     authed = true;
-                    std::string bStr = extractJsonValue(regRes, "unclaimed_pool");
-                    if (bStr.empty()) bStr = extractJsonValue(regRes, "pool_balance");
-                    poolPendingBalance = safeStod(bStr, 0.0);
-                    std::cout << COLOR_GREEN << "[OK] Created & authed worker [" << workerName << "].\n" << COLOR_RESET;
+                    std::string b = extractJsonValue(reg, "unclaimed_pool");
+                    if (b.empty()) b = extractJsonValue(reg, "pool_balance");
+                    poolPending = toDouble(b, 0.0);
+                    std::cout << COLOR_GREEN << "[OK] Created & authed [" << workerName << "].\n" << COLOR_RESET << std::flush;
+                } else if (st == "taken") {
+                    std::cout << COLOR_RED << "Name is already taken by another worker.\n" << COLOR_RESET << std::flush;
                 } else {
-                    std::cout << COLOR_RED << "Name is already taken by another worker.\n" << COLOR_RESET;
+                    std::cout << COLOR_RED << "[ERROR] Register failed: " << (reg.empty() ? "Empty response" : reg) << "\n" << COLOR_RESET << std::flush;
                 }
-                flushOut();
-                std::this_thread::sleep_for(std::chrono::seconds(1));
-            } else if (subMode == 2) {
-                std::string inputName, inputToken;
-                std::cout << "Name: ";
-                flushOut();
-                if (!(std::cin >> inputName)) {
-                    discardRestOfLine();
-                    continue;
-                }
-                discardRestOfLine();
+                std::this_thread::sleep_for(std::chrono::seconds(2));
+            } else if (mode == 2) {
+                std::string name, tok;
+                std::cout << "Name: " << std::flush;
+                if (!(std::cin >> name)) { discardLine(); continue; }
+                discardLine();
+                std::cout << "Token: " << std::flush;
+                if (!(std::cin >> tok)) { discardLine(); continue; }
+                discardLine();
 
-                std::cout << "Token: ";
-                flushOut();
-                if (!(std::cin >> inputToken)) {
-                    discardRestOfLine();
-                    continue;
-                }
-                discardRestOfLine();
-
-                std::string payload = "{\"worker\":\"" + inputName + "\",\"token\":\"" + inputToken + "\"}";
-                std::string authRes = execCurlJsonPost(baseDir, poolUrl + "/auth_worker", payload, 8);
-                if (cleanJsonString(extractJsonValue(authRes, "status")) == "ok") {
-                    workerName = inputName;
-                    workerToken = inputToken;
+                std::string authRes = httpPostJson(poolUrl + "/auth_worker", name, tok, 8);
+                if (trimClean(extractJsonValue(authRes, "status")) == "ok") {
+                    workerName = name;
+                    workerToken = tok;
                     authed = true;
-                    std::string bStr = extractJsonValue(authRes, "unclaimed_pool");
-                    if (bStr.empty()) bStr = extractJsonValue(authRes, "pool_balance");
-                    poolPendingBalance = safeStod(bStr, poolPendingBalance);
-                    std::cout << COLOR_GREEN << "[OK] Authenticated [" << workerName << "] | Unclaimed: " << std::fixed << std::setprecision(8) << poolPendingBalance << " BTC\n" << COLOR_RESET;
+                    std::string b = extractJsonValue(authRes, "unclaimed_pool");
+                    if (b.empty()) b = extractJsonValue(authRes, "pool_balance");
+                    poolPending = toDouble(b, poolPending);
+                    std::cout << COLOR_GREEN << "[OK] Authed [" << workerName << "].\n" << COLOR_RESET << std::flush;
                 } else {
-                    std::cout << COLOR_RED << "[ERROR] Auth failed: invalid name or token.\n" << COLOR_RESET;
+                    std::cout << COLOR_RED << "[ERROR] Auth failed.\n" << COLOR_RESET << std::flush;
                 }
-                flushOut();
                 std::this_thread::sleep_for(std::chrono::seconds(2));
             }
-        } else if (pChoice == optSetUrl) {
-            std::cout << "Enter Pool URL: ";
-            flushOut();
+        } else if (ch == 2) {
+            std::cout << "Enter Pool URL: " << std::flush;
             if (std::cin >> poolUrl) {
-                discardRestOfLine();
+                discardLine();
                 if (!poolUrl.empty() && poolUrl.back() == '/') poolUrl.pop_back();
-            } else {
-                discardRestOfLine();
-            }
-        } else if (pChoice == optClaim) {
+            } else discardLine();
+        } else if (ch == 3) {
             if (poolUrl.empty()) {
-                std::cout << COLOR_RED << "[ERROR] Configure Pool URL first!\n" << COLOR_RESET;
-                flushOut();
+                std::cout << COLOR_RED << "[ERROR] Set Pool URL first!\n" << COLOR_RESET << std::flush;
                 std::this_thread::sleep_for(std::chrono::seconds(1));
             } else {
-                std::string payload = "{\"worker\":\"" + workerName + "\",\"token\":\"" + workerToken + "\"}";
-                std::string res = execCurlJsonPost(baseDir, poolUrl + "/claim_distribution", payload, 8);
-                std::string status = cleanJsonString(extractJsonValue(res, "status"));
-                if (status == "claimed") {
-                    double claimed = safeStod(extractJsonValue(res, "claimed"), 0.0);
-                    walletBalance += claimed;
-                    poolPendingBalance = 0.0;
-                    std::cout << COLOR_GREEN << "[SUCCESS] Claimed +" << std::fixed << std::setprecision(8) << claimed << " BTC to local wallet!\n" << COLOR_RESET;
-                } else if (status == "unauthorized") {
+                std::string res = httpPostJson(poolUrl + "/claim_distribution", workerName, workerToken, 8);
+                std::string st = trimClean(extractJsonValue(res, "status"));
+                if (st == "claimed") {
+                    double claimed = toDouble(extractJsonValue(res, "claimed"), 0.0);
+                    balance += claimed;
+                    poolPending = 0.0;
+                    std::cout << COLOR_GREEN << "[SUCCESS] Claimed +" << std::fixed << std::setprecision(8) << claimed << " BTC\n" << COLOR_RESET << std::flush;
+                } else if (st == "unauthorized") {
                     authed = false;
-                    std::cout << COLOR_RED << "Could not authorize the user, please try again.\n" << COLOR_RESET;
+                    std::cout << COLOR_RED << "Could not authorize the user, please try again.\n" << COLOR_RESET << std::flush;
                 } else {
-                    std::cout << COLOR_YELLOW << "[INFO] No pool balance available to claim.\n" << COLOR_RESET;
+                    std::cout << COLOR_YELLOW << "[INFO] No pool balance to claim.\n" << COLOR_RESET << std::flush;
                 }
-                flushOut();
                 std::this_thread::sleep_for(std::chrono::seconds(2));
             }
         }
-
-        saveGameState(saveFilePath, walletBalance, poolPendingBalance, blockIndex, difficulty, autoMineNext, autoDifficulty, targetHashrate, outputRate, isBanned, isSpeedModActive, isHackerModActive, inspectionWait, workerName, workerToken, authed, poolUrl);
+        saveState(saveFile, balance, poolPending, blockIdx, diff, autoMine, autoDiff, hashrate, outRate, banned, speedMod, hackerMod, inspectWait, workerName, workerToken, authed, poolUrl);
     }
 }
 
 int main() {
     std::ios_base::sync_with_stdio(false);
     std::cin.tie(NULL);
-    enableAnsiColors();
+    enableAnsi();
 
     AppPaths paths = getAppPaths();
-    if (!verifyExeInsideBaseDir(paths.baseDir)) {
+    if (!verifyExeInBaseDir(paths.baseDir)) {
         clearScreen();
-        std::cout << COLOR_RED << "[ERROR] miner.exe must be placed inside:\n"
-                  << paths.baseDir << "\n"
-                  << "before running for the first time.\n" << COLOR_RESET;
-        waitForEnter("\nPress ENTER to exit...");
+        std::cout << COLOR_RED << "[ERROR] Place miner.exe inside:\n" << paths.baseDir << "\nbefore first run.\n" << COLOR_RESET;
+        waitEnter("\nPress ENTER to exit...");
         return 1;
     }
 
-    try {
-        std::filesystem::create_directories(paths.modsDir);
-    } catch (...) {}
+    try { std::filesystem::create_directories(paths.modsDir); } catch (...) {}
 
-    int difficulty = 3;
-    bool autoMineNext = true;
-    bool inspectionWait = true;
-    bool autoDifficulty = true;
-    long long targetHashrate = 2500000;
-    long long outputRate = 50000;
-    double walletBalance = 1.0;
-    double poolPendingBalance = 0.0;
-    int blockIndex = 1;
-    bool isBanned = false;
-    std::string workerName = "Node_01";
-    std::string workerToken = "";
-    bool authed = false;
-    std::string poolUrl = "";
+    int diff = 3, blockIdx = 1;
+    bool autoMine = true, inspectWait = true, autoDiff = true, banned = false, authed = false;
+    long long hashrate = 2500000, outRate = 50000;
+    double balance = 1.0, poolPending = 0.0;
+    std::string workerName = "Node_01", workerToken = "", poolUrl = "";
 
-    bool isSpeedModActive = verifyMod(paths.speedMod, SPEED_TOKEN);
-    bool isHackerModActive = verifyMod(paths.hackerMod, HACKER_TOKEN);
-    bool isPoolModActive = verifyMod(paths.poolMod, POOL_TOKEN);
+    bool speedMod = verifyMod(paths.speedMod, SPEED_TOKEN);
+    bool hackerMod = verifyMod(paths.hackerMod, HACKER_TOKEN);
+    bool poolMod = verifyMod(paths.poolMod, POOL_TOKEN);
 
-    loadGameState(paths.saveFile, walletBalance, poolPendingBalance, blockIndex, difficulty, autoMineNext, autoDifficulty, targetHashrate, outputRate, isBanned, isSpeedModActive, isHackerModActive, inspectionWait, workerName, workerToken, authed, poolUrl);
+    loadState(paths.saveFile, balance, poolPending, blockIdx, diff, autoMine, autoDiff, hashrate, outRate, banned, speedMod, hackerMod, inspectWait, workerName, workerToken, authed, poolUrl);
 
-    if (isBanned) {
+    if (banned) {
         clearScreen();
-        std::cout << COLOR_RED << "access denied\n"
-                  << "Your config file has been found as compromised/modified illegally, programme locked permanently and your data has been wiped. To continue, delete the existing configs file.\n"
-                  << COLOR_RESET << "\n";
-        waitForEnter("Press ENTER to exit program...");
+        std::cout << COLOR_RED << "access denied\nConfig compromised. Delete financial_report.json to reset.\n" << COLOR_RESET;
+        waitEnter("\nPress ENTER to exit...");
         return 0;
     }
 
-    int choice = 0;
     while (true) {
         clearScreen();
-        int hardwareCores = static_cast<int>(std::thread::hardware_concurrency());
-        if (hardwareCores < 1) hardwareCores = 4;
+        int threads = (std::max)(1, static_cast<int>(std::thread::hardware_concurrency()));
+        if (!poolMod) {
+            std::cout << "> miner_main_menu\n----------------------------------------\n"
+                      << "  [1] start_mining\n  [2] options\n  [3] quit\n----------------------------------------\n"
+                      << "wallet_balance: " << std::fixed << std::setprecision(8) << balance << " BTC\n"
+                      << "current_hash  : " << (speedMod ? "UNLIMITED [RAW SPEED MOD]" : std::to_string(hashrate) + " H/s") << "\n"
+                      << "cpu_threads   : " << threads << " Cores\n"
+                      << "current_block : #" << blockIdx << "\n"
+                      << (speedMod ? COLOR_CYAN "[MOD LOADER] unlimited_speed.mod\n" : "")
+                      << (hackerMod ? COLOR_MAGENTA "[MOD LOADER] hacker.mod\n" : "")
+                      << COLOR_RESET << "root@miner:~# " << std::flush;
 
-        if (!isPoolModActive) {
-            std::cout << "> miner_main_menu\n"
-                      << "----------------------------------------\n"
-                      << "  [1] start_mining\n"
-                      << "  [2] options\n"
-                      << "  [3] quit\n"
-                      << "----------------------------------------\n"
-                      << "wallet_balance: " << std::fixed << std::setprecision(8) << walletBalance << " BTC\n"
-                      << "current_hash  : " << (isSpeedModActive ? "UNLIMITED [RAW SPEED MOD]" : std::to_string(targetHashrate) + " H/s") << "\n"
-                      << "cpu_threads   : " << hardwareCores << " cores\n"
-                      << "current_block : #" << blockIndex << "\n"
-                      << (isSpeedModActive ? COLOR_CYAN "[MOD LOADER] Active: unlimited_speed.mod detected!\n" : "")
-                      << (isHackerModActive ? COLOR_CYAN "[MOD LOADER] Active: hacker.mod detected (Admin Unlocked)!\n" : "")
-                      << COLOR_RESET
-                      << "root@miner:~# ";
-            flushOut();
-
-            if (!(std::cin >> choice)) {
-                discardRestOfLine();
-                continue;
-            }
-            discardRestOfLine();
-
-            if (choice == 3) {
-                std::cout << "Terminating process...\n";
-                flushOut();
-                saveGameState(paths.saveFile, walletBalance, poolPendingBalance, blockIndex, difficulty, autoMineNext, autoDifficulty, targetHashrate, outputRate, isBanned, isSpeedModActive, isHackerModActive, inspectionWait, workerName, workerToken, authed, poolUrl);
-                break;
-            } else if (choice == 2) {
-                runStandardOptions(paths.saveFile, walletBalance, poolPendingBalance, blockIndex, difficulty, autoMineNext, autoDifficulty, targetHashrate, outputRate, isBanned, isSpeedModActive, isHackerModActive, inspectionWait, workerName, workerToken, authed, poolUrl);
-            } else if (choice == 1) {
-                runLocalMining(paths.saveFile, walletBalance, poolPendingBalance, blockIndex, difficulty, autoMineNext, autoDifficulty, targetHashrate, outputRate, isBanned, isSpeedModActive, isHackerModActive, inspectionWait, workerName, workerToken, authed, poolUrl);
-            }
+            int ch = 0;
+            if (!(std::cin >> ch)) { discardLine(); continue; }
+            discardLine();
+            if (ch == 3) { saveState(paths.saveFile, balance, poolPending, blockIdx, diff, autoMine, autoDiff, hashrate, outRate, banned, speedMod, hackerMod, inspectWait, workerName, workerToken, authed, poolUrl); break; }
+            if (ch == 2) runStandardOptions(paths.saveFile, balance, poolPending, blockIdx, diff, autoMine, autoDiff, hashrate, outRate, banned, speedMod, hackerMod, inspectWait, workerName, workerToken, authed, poolUrl);
+            if (ch == 1) runLocalMining(paths.saveFile, balance, poolPending, blockIdx, diff, autoMine, autoDiff, hashrate, outRate, banned, speedMod, hackerMod, inspectWait, workerName, workerToken, authed, poolUrl);
         } else {
-            std::cout << "> miner_main_menu\n"
-                      << "----------------------------------------\n"
-                      << "  [1] solo_mining\n"
-                      << "  [2] pool_mining\n"
-                      << "  [3] options\n"
-                      << "  [4] pool_options\n"
-                      << "  [5] quit\n"
-                      << "----------------------------------------\n"
+            std::cout << "> miner_main_menu\n----------------------------------------\n"
+                      << "  [1] solo_mining\n  [2] pool_mining\n  [3] options\n  [4] pool_options\n  [5] quit\n----------------------------------------\n"
                       << "worker_id     : " << COLOR_CYAN << workerName << COLOR_RESET << "\n"
-                      << "wallet_balance: " << std::fixed << std::setprecision(8) << walletBalance << " BTC\n"
-                      << "pool_unclaimed: " << COLOR_YELLOW << std::fixed << std::setprecision(8) << poolPendingBalance << " BTC" << COLOR_RESET << "\n"
-                      << "current_hash  : " << (isSpeedModActive ? "UNLIMITED [RAW SPEED MOD]" : std::to_string(targetHashrate) + " H/s") << "\n"
-                      << "cpu_threads   : " << hardwareCores << " cores\n"
-                      << "current_block : #" << blockIndex << "\n"
-                      << (isSpeedModActive ? COLOR_CYAN "[MOD LOADER] Active: unlimited_speed.mod detected!\n" : "")
-                      << (isHackerModActive ? COLOR_CYAN "[MOD LOADER] Active: hacker.mod detected!\n" : "")
-                      << COLOR_YELLOW "[MOD LOADER] Active: pool_mining.mod detected!\n"
-                      << COLOR_RESET
-                      << "root@miner:~# ";
-            flushOut();
+                      << "pool_host     : " << (poolUrl.empty() ? "Not Configured" : poolUrl) << "\n"
+                      << "wallet_balance: " << std::fixed << std::setprecision(8) << balance << " BTC\n"
+                      << "pool_unclaimed: " << COLOR_YELLOW << std::fixed << std::setprecision(8) << poolPending << " BTC" << COLOR_RESET << "\n"
+                      << "current_hash  : " << (speedMod ? "UNLIMITED [RAW SPEED MOD]" : std::to_string(hashrate) + " H/s") << "\n"
+                      << "cpu_threads   : " << threads << " Cores\n"
+                      << "current_block : #" << blockIdx << "\n"
+                      << (speedMod ? COLOR_CYAN "[MOD LOADER] unlimited_speed.mod\n" : "")
+                      << (hackerMod ? COLOR_MAGENTA "[MOD LOADER] hacker.mod\n" : "")
+                      << COLOR_YELLOW "[MOD LOADER] pool_mining.mod\n" << COLOR_RESET
+                      << "root@miner:~# " << std::flush;
 
-            if (!(std::cin >> choice)) {
-                discardRestOfLine();
-                continue;
-            }
-            discardRestOfLine();
-
-            if (choice == 5) {
-                std::cout << "Terminating process...\n";
-                flushOut();
-                saveGameState(paths.saveFile, walletBalance, poolPendingBalance, blockIndex, difficulty, autoMineNext, autoDifficulty, targetHashrate, outputRate, isBanned, isSpeedModActive, isHackerModActive, inspectionWait, workerName, workerToken, authed, poolUrl);
-                break;
-            } else if (choice == 4) {
-                runPoolOptions(paths.baseDir, paths.saveFile, walletBalance, poolPendingBalance, blockIndex, difficulty, autoMineNext, autoDifficulty, targetHashrate, outputRate, isBanned, isSpeedModActive, isHackerModActive, inspectionWait, workerName, workerToken, authed, poolUrl);
-            } else if (choice == 3) {
-                runStandardOptions(paths.saveFile, walletBalance, poolPendingBalance, blockIndex, difficulty, autoMineNext, autoDifficulty, targetHashrate, outputRate, isBanned, isSpeedModActive, isHackerModActive, inspectionWait, workerName, workerToken, authed, poolUrl);
-            } else if (choice == 2) {
-                runPoolMining(paths.baseDir, paths.saveFile, walletBalance, poolPendingBalance, blockIndex, difficulty, autoMineNext, autoDifficulty, targetHashrate, outputRate, isBanned, isSpeedModActive, isHackerModActive, inspectionWait, workerName, workerToken, authed, poolUrl);
-            } else if (choice == 1) {
-                runLocalMining(paths.saveFile, walletBalance, poolPendingBalance, blockIndex, difficulty, autoMineNext, autoDifficulty, targetHashrate, outputRate, isBanned, isSpeedModActive, isHackerModActive, inspectionWait, workerName, workerToken, authed, poolUrl);
-            }
+            int ch = 0;
+            if (!(std::cin >> ch)) { discardLine(); continue; }
+            discardLine();
+            if (ch == 5) { saveState(paths.saveFile, balance, poolPending, blockIdx, diff, autoMine, autoDiff, hashrate, outRate, banned, speedMod, hackerMod, inspectWait, workerName, workerToken, authed, poolUrl); break; }
+            if (ch == 4) runPoolOptions(paths.saveFile, balance, poolPending, blockIdx, diff, autoMine, autoDiff, hashrate, outRate, banned, speedMod, hackerMod, inspectWait, workerName, workerToken, authed, poolUrl);
+            if (ch == 3) runStandardOptions(paths.saveFile, balance, poolPending, blockIdx, diff, autoMine, autoDiff, hashrate, outRate, banned, speedMod, hackerMod, inspectWait, workerName, workerToken, authed, poolUrl);
+            if (ch == 2) runPoolMining(paths.saveFile, balance, poolPending, blockIdx, diff, autoMine, autoDiff, hashrate, outRate, banned, speedMod, hackerMod, inspectWait, workerName, workerToken, authed, poolUrl);
+            if (ch == 1) runLocalMining(paths.saveFile, balance, poolPending, blockIdx, diff, autoMine, autoDiff, hashrate, outRate, banned, speedMod, hackerMod, inspectWait, workerName, workerToken, authed, poolUrl);
         }
-        clearScreen();
     }
     return 0;
 }
